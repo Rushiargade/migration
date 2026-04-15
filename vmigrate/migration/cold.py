@@ -445,7 +445,7 @@ class ColdMigration:
             # IMPORTANT: always use PurePosixPath for remote paths so that
             # forward slashes are preserved even when running on Windows.
             if conv_ssh is not None:
-                remote_dir  = PurePosixPath("/tmp/vmigrate") / self.vm_name
+                remote_dir  = PurePosixPath("/var/lib/vmigrate") / self.vm_name
                 remote_vmdk = remote_dir / vmdk_path.name
                 remote_qcow2 = remote_dir / vmdk_path.with_suffix(".qcow2").name
 

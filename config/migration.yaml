@@ -33,9 +33,9 @@ migration:
   
   # Working directory on CONVERSION HOST (10.5.5.113)
   # Disks are downloaded directly here, converted, then imported to Proxmox
-  # IMPORTANT: Requires 500GB+ free space on 10.5.5.113 (/tmp or mounted storage)
-  work_dir: /tmp/vmigrate
-  state_db: /tmp/vmigrate/state.db # SQLite state database path
+  # IMPORTANT: Requires 500GB+ free space on 10.5.5.113 (/var/lib or mounted storage)
+  work_dir: /var/lib/vmigrate
+  state_db: /var/lib/vmigrate/state.db # SQLite state database path
   max_parallel: 2                  # Maximum concurrent VM migrations
   retry_attempts: 3                # Retry count per phase on failure
   retry_delay_seconds: 30          # Initial delay between retries (exponential backoff)
@@ -48,7 +48,7 @@ migration:
   # Conversion host: Rocky Linux with Docker, qemu-img, and virt-v2v
   # 10.5.5.113 is on Proxmox cluster network (same IP range)
   # Disks download directly here (no intermediate storage on Windows)
-  # Flow: vCenter -> 10.5.5.113:/tmp/vmigrate -> convert locally -> Proxmox import
+  # Flow: vCenter -> 10.5.5.113:/var/lib/vmigrate -> convert locally -> Proxmox import
   conversion_host: 10.5.5.113
   conversion_host_user: root
 

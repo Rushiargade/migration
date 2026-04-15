@@ -28,7 +28,7 @@ _LOG_RE = re.compile(
     r"(?P<rest>.*)"
 )
 
-_WORK_DIR = Path("/tmp/vmigrate")
+_WORK_DIR = Path("/var/lib/vmigrate")
 
 
 def _find_log_file(vm_name: str) -> Path | None:

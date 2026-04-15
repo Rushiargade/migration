@@ -22,7 +22,7 @@ COPY config ./config
 RUN pip install --no-cache-dir -e ".[web]"
 
 # Create directories for runtime artifacts
-RUN mkdir -p /tmp/vmigrate /app/logs /app/data
+RUN mkdir -p /var/lib/vmigrate /app/logs /app/data
 
 # Expose ports
 EXPOSE 8080

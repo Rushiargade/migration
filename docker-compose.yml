@@ -8,7 +8,7 @@ services:
       # Configuration directory (bind mount)
       - ./config:/app/config
       # Persistent volumes for runtime data
-      - vmigrate-data:/tmp/vmigrate
+      - vmigrate-data:/var/lib/vmigrate
       - vmigrate-logs:/app/logs
     environment:
       # Credentials can be set in the UI or via env vars
@@ -38,7 +38,7 @@ services:
       - batch
     volumes:
       - ./config:/app/config
-      - vmigrate-data:/tmp/vmigrate
+      - vmigrate-data:/var/lib/vmigrate
       - vmigrate-logs:/app/logs
     environment:
       - VSPHERE_PASSWORD=${VSPHERE_PASSWORD:-}

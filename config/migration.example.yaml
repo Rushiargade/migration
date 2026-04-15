@@ -30,8 +30,8 @@ proxmox:
 # ---------------------------------------------------------------------------
 migration:
   mode: cold                       # Default mode: cold | live
-  work_dir: /tmp/vmigrate          # Working directory for disk images and logs
-  state_db: /tmp/vmigrate/state.db # SQLite state database path
+  work_dir: /var/lib/vmigrate          # Working directory for disk images and logs
+  state_db: /var/lib/vmigrate/state.db # SQLite state database path
   max_parallel: 2                  # Maximum concurrent VM migrations
   retry_attempts: 3                # Retry count per phase on failure
   retry_delay_seconds: 30          # Initial delay between retries (exponential backoff)

@@ -181,7 +181,7 @@ docker-compose exec vmigrate-web vmigrate status --config /app/config/migration.
 | Container Path | Mount Type | Purpose | Persistence |
 |---|---|---|---|
 | `/app/config` | Bind mount (host `./config`) | Configuration YAML files | Host filesystem |
-| `/tmp/vmigrate` | **Persistent volume** `vmigrate-data` | State DB + migration artifacts | **Survives down/deletion** |
+| `/var/lib/vmigrate` | **Persistent volume** `vmigrate-data` | State DB + migration artifacts | **Survives down/deletion** |
 | `/app/logs` | **Persistent volume** `vmigrate-logs` | Application logs | **Survives down/deletion** |
 
 **Key difference:**
