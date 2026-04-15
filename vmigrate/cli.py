@@ -292,6 +292,8 @@ def preflight(config: str, vm_name: Optional[str]) -> None:
 @cli.command("migrate")
 @click.option("--config", "-c", default=DEFAULT_CONFIG, show_default=True)
 @click.option("--vm", "vm_name", default=None, help="Migrate a single VM by name.")
+@click.option("--vms", "vm_list", default=None, help="Comma-separated list of VM names to migrate.")
+@click.option("--vm-file", "vm_file", default=None, help="Path to file with newline-separated VM names.")
 @click.option("--all", "migrate_all", is_flag=True, help="Migrate all VMs in config.")
 @click.option("--dry-run", is_flag=True, help="Print plan without executing.")
 @click.option(
@@ -304,37 +306,49 @@ def preflight(config: str, vm_name: Optional[str]) -> None:
 def migrate(
     config: str,
     vm_name: Optional[str],
+    vm_list: Optional[str],
+    vm_file: Optional[str],
     migrate_all: bool,
     dry_run: bool,
     log_level: str,
 ) -> None:
     """Execute VM migration(s) from VMware to Proxmox.
 
-    Either --vm NAME or --all must be specified.
+    Either --vm NAME, --vms LIST, --vm-file PATH, or --all must be specified.
 
     \b
     Examples:
       vmigrate migrate --all
       vmigrate migrate --vm web-server-01
+      vmigrate migrate --vms web-01,web-02,db-01
+      vmigrate migrate --vm-file batch1.txt
       vmigrate migrate --all --dry-run
-      vmigrate migrate --vm db-01 --log-level DEBUG
     """
-    if not vm_name and not migrate_all:
+    # Parse VM names from various sources
+    vm_names_to_migrate: Optional[list[str]] = None
+
+    if vm_name:
+        vm_names_to_migrate = [vm_name]
+    elif vm_list:
+        vm_names_to_migrate = [v.strip() for v in vm_list.split(",") if v.strip()]
+    elif vm_file:
+        vm_file_path = Path(vm_file)
+        from vmigrate.batch import load_vm_list_from_file
+        vm_names_to_migrate = load_vm_list_from_file(vm_file_path)
+    elif not migrate_all:
         console.print(
-            "[bold red]Error:[/bold red] Specify --vm NAME or --all."
+            "[bold red]Error:[/bold red] Specify --vm NAME, --vms LIST, --vm-file PATH, or --all."
         )
         sys.exit(1)
 
     cfg = _load_config_or_exit(config)
     state = _get_state_db(cfg)
 
-    vm_names = [vm_name] if vm_name else None
-
     from vmigrate.migration.orchestrator import MigrationOrchestrator
 
     orchestrator = MigrationOrchestrator(cfg, state)
     try:
-        results = orchestrator.run(vm_names=vm_names, dry_run=dry_run)
+        results = orchestrator.run(vm_names=vm_names_to_migrate, dry_run=dry_run)
     finally:
         state.close()
 
@@ -662,12 +676,29 @@ def serve(host: str, port: int, config: Optional[str]) -> None:
         console.print(f"[bold red]Error:[/bold red] Cannot import web app: {exc}")
         sys.exit(1)
 
-    app = create_app(config_path=config)
+    console.print(f"[bold]Loading app configuration...[/bold]")
+    sys.stdout.flush()
+    
+    try:
+        app = create_app(config_path=config)
+    except Exception as exc:
+        console.print(f"[bold red]Error creating app:[/bold red] {exc}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
     console.print(f"[bold green]vmigrate Web UI[/bold green] starting on [cyan]http://{host}:{port}[/cyan]")
+    console.print("Open in browser: [link]http://localhost:8080[/link]")
     console.print("Press [bold]Ctrl+C[/bold] to stop.\n")
+    sys.stdout.flush()
 
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="info")
+    except Exception as exc:
+        console.print(f"[bold red]Server error:[/bold red] {exc}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

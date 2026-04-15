@@ -142,6 +142,12 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     app.include_router(migration_router, prefix="/api")
     app.include_router(logs_router, prefix="/api")
 
+    # ----- Health check endpoint -----
+    @app.get("/health", include_in_schema=False)
+    async def health() -> dict:
+        """Simple health check for container orchestration."""
+        return {"status": "ok", "service": "vmigrate-web"}
+
     # ----- Static files -----
     if _STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")

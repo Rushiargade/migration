@@ -1,0 +1,64 @@
+services:
+  vmigrate-web:
+    build: .
+    container_name: vmigrate-web
+    ports:
+      - "8080:8080"
+    volumes:
+      # Configuration directory (bind mount)
+      - ./config:/app/config
+      # Persistent volumes for runtime data
+      - vmigrate-data:/tmp/vmigrate
+      - vmigrate-logs:/app/logs
+    environment:
+      # Credentials can be set in the UI or via env vars
+      - VSPHERE_PASSWORD=${VSPHERE_PASSWORD:-}
+      - VSPHERE_HOST=${VSPHERE_HOST:-vcenter.example.com}
+      - PROXMOX_PASSWORD=${PROXMOX_PASSWORD:-}
+      - PROXMOX_HOST=${PROXMOX_HOST:-proxmox.example.com}
+    command: ["vmigrate", "serve", "--host", "0.0.0.0", "--port", "8080", "--config", "/app/config/migration.yaml"]
+    restart: unless-stopped
+    networks:
+      - vmigrate-net
+    # NOTE: Health check disabled on Windows Docker Desktop.
+    # The server works fine, but localhost is not accessible from host.
+    # Use http://127.0.0.1:8080 to access the UI from Windows host.
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8080/health || exit 1"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+    #   start_period: 10s
+
+  # Optional: separate service for batch migrations (CLI only)
+  vmigrate-batch:
+    build: .
+    container_name: vmigrate-batch
+    profiles:
+      - batch
+    volumes:
+      - ./config:/app/config
+      - vmigrate-data:/tmp/vmigrate
+      - vmigrate-logs:/app/logs
+    environment:
+      - VSPHERE_PASSWORD=${VSPHERE_PASSWORD:-}
+      - VSPHERE_HOST=${VSPHERE_HOST:-vcenter.example.com}
+      - PROXMOX_PASSWORD=${PROXMOX_PASSWORD:-}
+      - PROXMOX_HOST=${PROXMOX_HOST:-proxmox.example.com}
+    # Override entrypoint for batch migrations
+    entrypoint: vmigrate
+    command: ["migrate", "--config", "/app/config/migration.yaml", "--all", "--log-level", "INFO"]
+    networks:
+      - vmigrate-net
+
+volumes:
+  # Persistent volume for migration state DB and artifacts
+  vmigrate-data:
+    driver: local
+  # Persistent volume for logs
+  vmigrate-logs:
+    driver: local
+
+networks:
+  vmigrate-net:
+    driver: bridge

@@ -224,12 +224,15 @@ class StateDB:
         if row is None:
             raise KeyError(f"VM '{vm_name}' not found in state DB.")
         artifacts: dict = json.loads(row["artifacts"] or "{}")
-        artifacts[key] = value
-        with self._conn:
-            self._conn.execute(
-                "UPDATE vm_state SET artifacts = ? WHERE vm_name = ?",
-                (json.dumps(artifacts), vm_name),
-            )
+        
+        # Only write if the value actually changed
+        if artifacts.get(key) != value:
+            artifacts[key] = value
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE vm_state SET artifacts = ? WHERE vm_name = ?",
+                    (json.dumps(artifacts), vm_name),
+                )
 
     def get_artifact(self, vm_name: str, key: str) -> object:
         """Retrieve an artifact value for a VM.
