@@ -1,0 +1,2 @@
+[console_scripts]
+vmigrate = vmigrate.cli:cli

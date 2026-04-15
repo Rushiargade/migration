@@ -1,0 +1,8 @@
+pyVmomi>=8.0.1
+proxmoxer>=2.0.1
+requests>=2.31.0
+paramiko>=3.4.0
+pyyaml>=6.0.1
+click>=8.1.7
+rich>=13.7.0
+pywinrm>=0.4.3

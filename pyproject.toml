@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vmigrate"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pyVmomi>=8.0.1",
+    "proxmoxer>=2.0.1",
+    "requests>=2.31.0",
+    "paramiko>=3.4.0",
+    "pyyaml>=6.0.1",
+    "click>=8.1.7",
+    "rich>=13.7.0",
+    "pywinrm>=0.4.3",
+]
+
+[project.scripts]
+vmigrate = "vmigrate.cli:cli"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.12"]
+web = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.29.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vmigrate*"]

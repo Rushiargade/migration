@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: vmigrate
+Version: 0.1.0
+Requires-Python: >=3.10
+Requires-Dist: pyVmomi>=8.0.1
+Requires-Dist: proxmoxer>=2.0.1
+Requires-Dist: requests>=2.31.0
+Requires-Dist: paramiko>=3.4.0
+Requires-Dist: pyyaml>=6.0.1
+Requires-Dist: click>=8.1.7
+Requires-Dist: rich>=13.7.0
+Requires-Dist: pywinrm>=0.4.3
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-mock>=3.12; extra == "dev"
+Provides-Extra: web
+Requires-Dist: fastapi>=0.111.0; extra == "web"
+Requires-Dist: uvicorn[standard]>=0.29.0; extra == "web"

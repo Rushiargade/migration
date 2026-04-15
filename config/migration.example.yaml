@@ -1,0 +1,91 @@
+# vmigrate - VM Migration Configuration
+# Copy this file to config/migration.yaml and fill in your values.
+# Passwords should reference environment variables using ${ENV_VAR} syntax.
+# Example: export VSPHERE_PASSWORD=mysecret
+
+# ---------------------------------------------------------------------------
+# VMware vSphere source connection
+# ---------------------------------------------------------------------------
+vmware:
+  host: vcenter.example.com        # vCenter or ESXi hostname/IP
+  port: 443                        # HTTPS port (default: 443)
+  username: administrator@vsphere.local
+  password: ${VSPHERE_PASSWORD}    # Set env var: export VSPHERE_PASSWORD=...
+  datacenter: "DC1"                # Datacenter name as shown in vCenter
+  verify_ssl: false                # Set true in production with valid cert
+
+# ---------------------------------------------------------------------------
+# Proxmox VE destination connection
+# ---------------------------------------------------------------------------
+proxmox:
+  host: proxmox.example.com        # Proxmox host or cluster VIP
+  port: 8006                       # Proxmox API port (default: 8006)
+  user: root@pam                   # Proxmox user (realm required)
+  password: ${PROXMOX_PASSWORD}    # Set env var: export PROXMOX_PASSWORD=...
+  node: pve1                       # Target Proxmox node name
+  verify_ssl: false                # Set true in production with valid cert
+
+# ---------------------------------------------------------------------------
+# Migration engine settings
+# ---------------------------------------------------------------------------
+migration:
+  mode: cold                       # Default mode: cold | live
+  work_dir: /tmp/vmigrate          # Working directory for disk images and logs
+  state_db: /tmp/vmigrate/state.db # SQLite state database path
+  max_parallel: 2                  # Maximum concurrent VM migrations
+  retry_attempts: 3                # Retry count per phase on failure
+  retry_delay_seconds: 30          # Initial delay between retries (exponential backoff)
+
+  # Path to VirtIO drivers ISO on the conversion host (for Windows VMs)
+  # Download from: https://fedorapeople.org/groups/virt/virtio-win/
+  virtio_iso_path: /opt/virtio-win/virtio-win.iso
+
+  # Conversion host: Linux machine with qemu-img and virt-v2v installed
+  conversion_host: conversion.example.com
+  conversion_host_user: root
+
+# ---------------------------------------------------------------------------
+# Network mapping: VMware portgroup -> Proxmox bridge
+# ---------------------------------------------------------------------------
+network_map:
+  - vmware_portgroup: "VM Network"         # Exact portgroup name in vCenter
+    proxmox_bridge: vmbr0                  # Proxmox Linux bridge name
+    # vlan_tag: 100                        # Optional: VLAN tag on Proxmox side
+
+  - vmware_portgroup: "Management Network"
+    proxmox_bridge: vmbr1
+    vlan_tag: 10
+
+  - vmware_portgroup: "Storage Network"
+    proxmox_bridge: vmbr2
+    vlan_tag: 20
+
+# ---------------------------------------------------------------------------
+# Storage mapping: VMware datastore -> Proxmox storage
+# ---------------------------------------------------------------------------
+storage_map:
+  - vmware_datastore: "datastore1"         # Exact datastore name in vCenter
+    proxmox_storage: local-lvm             # Proxmox storage ID
+    format: qcow2                          # Disk format: qcow2 | raw
+
+  - vmware_datastore: "SSD-Datastore"
+    proxmox_storage: ceph-pool
+    format: raw
+
+# ---------------------------------------------------------------------------
+# VMs to migrate
+# ---------------------------------------------------------------------------
+vms:
+  - name: "web-server-01"                  # Exact VM name in vCenter
+    # mode_override: live                  # Override global migration mode
+    target_node: pve1                      # Proxmox node for this VM
+    # post_migrate_script: /opt/scripts/post_web.sh  # Script run after migration
+
+  - name: "db-server-01"
+    mode_override: cold                    # Force cold migration regardless of global mode
+    target_node: pve2
+    post_migrate_script: /opt/scripts/post_db.sh
+
+  - name: "app-server-01"
+    target_node: pve1
+    # No post_migrate_script for this VM

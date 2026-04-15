@@ -1,0 +1,1746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vmigrate — VMware to Proxmox</title>
+<style>
+/* ─── Reset & Base ─────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0f1117;
+  --surface:   #1a1d27;
+  --surface2:  #222638;
+  --border:    #2e3348;
+  --accent:    #4a9eff;
+  --accent-dim:#1e3a5f;
+  --green:     #2ecc71;
+  --red:       #e74c3c;
+  --yellow:    #f39c12;
+  --dim:       #6b7280;
+  --text:      #e2e8f0;
+  --text-dim:  #94a3b8;
+  --radius:    8px;
+  --shadow:    0 4px 24px rgba(0,0,0,0.4);
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ─── Layout ────────────────────────────────────────────────────────────────── */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ─── Topbar ────────────────────────────────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 32px;
+  height: 56px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbar-brand {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.5px;
+}
+
+.topbar-brand span { color: var(--text-dim); font-weight: 400; }
+
+.steps {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.step-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.step-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.step-btn.done { border-color: var(--green); color: var(--green); }
+
+.step-num {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+}
+
+.step-btn.active .step-num { background: var(--accent); color: #fff; }
+.step-btn.done  .step-num  { background: var(--green);  color: #fff; }
+
+/* ─── Main content ──────────────────────────────────────────────────────────── */
+.main { flex: 1; padding: 32px; max-width: 1400px; margin: 0 auto; width: 100%; }
+
+/* ─── Pages (tabs) ──────────────────────────────────────────────────────────── */
+.page { display: none; }
+.page.active { display: block; }
+
+/* ─── Card ──────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ─── Forms ─────────────────────────────────────────────────────────────────── */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group.full { grid-column: 1 / -1; }
+.form-label { font-size: 12px; color: var(--text-dim); font-weight: 500; }
+
+input[type=text], input[type=password], input[type=number], select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 13px;
+  width: 100%;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input[type=text]:focus, input[type=password]:focus,
+input[type=number]:focus, select:focus {
+  border-color: var(--accent);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.toggle {
+  position: relative;
+  width: 36px; height: 20px;
+  flex-shrink: 0;
+}
+
+.toggle input { display: none; }
+
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.toggle input:checked + .toggle-track { background: var(--accent); }
+
+.toggle-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 16px; height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.toggle input:checked ~ .toggle-thumb { transform: translateX(16px); }
+
+/* ─── Buttons ───────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover:not(:disabled) { background: #3a8eef; }
+
+.btn-outline { background: transparent; color: var(--text); border-color: var(--border); }
+.btn-outline:hover:not(:disabled) { border-color: var(--text-dim); }
+
+.btn-danger { background: transparent; color: var(--red); border-color: var(--red); }
+.btn-danger:hover:not(:disabled) { background: rgba(231,76,60,0.1); }
+
+.btn-success { background: var(--green); color: #fff; border-color: var(--green); }
+.btn-success:hover:not(:disabled) { background: #27ae60; }
+
+.btn-sm { padding: 5px 12px; font-size: 12px; }
+
+/* ─── Status badge ──────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge-connected  { background: rgba(46,204,113,0.15); color: var(--green); border: 1px solid var(--green); }
+.badge-error      { background: rgba(231,76,60,0.15);  color: var(--red);   border: 1px solid var(--red);   }
+.badge-testing    { background: rgba(74,158,255,0.15); color: var(--accent); border: 1px solid var(--accent);}
+.badge-idle       { background: var(--surface2); color: var(--dim); border: 1px solid var(--border); }
+
+/* ─── Connection status box ─────────────────────────────────────────────────── */
+.conn-status {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  font-size: 12px;
+  min-height: 44px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.conn-status.ok    { border-color: var(--green); background: rgba(46,204,113,0.06); }
+.conn-status.fail  { border-color: var(--red);   background: rgba(231,76,60,0.06);  }
+
+.conn-detail { display: flex; flex-direction: column; gap: 3px; }
+.conn-detail strong { font-size: 13px; }
+.conn-kv { display: flex; gap: 16px; flex-wrap: wrap; color: var(--text-dim); }
+.conn-kv span strong { color: var(--text); }
+
+/* ─── Step 1 layout ─────────────────────────────────────────────────────────── */
+.connect-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+
+/* ─── Step 2 layout ─────────────────────────────────────────────────────────── */
+.select-grid { display: grid; grid-template-columns: 1fr 420px; gap: 24px; align-items: start; }
+
+/* ─── Table ─────────────────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--surface2); }
+
+.vm-name-cell { font-weight: 500; }
+.os-badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+.os-win  { background: rgba(0,120,212,0.2); color: #60a5fa; }
+.os-linux{ background: rgba(234,179,8,0.2); color: #fbbf24; }
+.os-other{ background: var(--surface2); color: var(--dim); }
+
+.power-on  { color: var(--green); }
+.power-off { color: var(--dim); }
+
+/* ─── Search bar ────────────────────────────────────────────────────────────── */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.search-bar input {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.selected-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* ─── Resource panel ────────────────────────────────────────────────────────── */
+.resource-section { margin-bottom: 20px; }
+.resource-section h4 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+
+.resource-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.resource-label { font-size: 11px; color: var(--text-dim); }
+.resource-value { font-size: 12px; color: var(--text-dim); }
+
+select option { background: var(--surface2); }
+
+.per-vm-list { display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; }
+.per-vm-item {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface2);
+}
+.per-vm-item h5 { font-size: 12px; margin-bottom: 8px; color: var(--accent); }
+.per-vm-item select { margin-bottom: 6px; font-size: 12px; padding: 6px 8px; }
+
+/* ─── Migration dashboard ───────────────────────────────────────────────────── */
+.summary-bar {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.summary-card {
+  flex: 1;
+  min-width: 120px;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summary-number { font-size: 28px; font-weight: 700; }
+.summary-label  { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.summary-card.total     .summary-number { color: var(--text); }
+.summary-card.running   .summary-number { color: var(--accent); }
+.summary-card.completed .summary-number { color: var(--green); }
+.summary-card.failed    .summary-number { color: var(--red); }
+
+/* ─── VM Cards ──────────────────────────────────────────────────────────────── */
+.vm-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(480px, 1fr)); gap: 20px; }
+
+.vm-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  position: relative;
+}
+
+.vm-card.status-running  { border-left: 3px solid var(--accent); }
+.vm-card.status-completed{ border-left: 3px solid var(--green); }
+.vm-card.status-failed   { border-left: 3px solid var(--red); }
+.vm-card.status-pending  { border-left: 3px solid var(--border); }
+
+.vm-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.vm-card-name { font-size: 15px; font-weight: 600; }
+.vm-card-status { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.vm-card-status.running   { color: var(--accent); }
+.vm-card-status.completed { color: var(--green); }
+.vm-card-status.failed    { color: var(--red); }
+.vm-card-status.pending   { color: var(--dim); }
+
+.vm-phase-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.vm-phase-label strong { color: var(--text); }
+
+/* ─── Progress bar ──────────────────────────────────────────────────────────── */
+.progress-track {
+  height: 6px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.progress-fill.done  { background: var(--green); }
+.progress-fill.error { background: var(--red); }
+
+/* ─── Phase timeline ────────────────────────────────────────────────────────── */
+.phase-timeline {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 14px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.phase-dot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 40px;
+  position: relative;
+}
+
+.phase-dot::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: -50%;
+  width: 100%;
+  height: 2px;
+  background: var(--border);
+  z-index: 0;
+}
+
+.phase-dot:first-child::before { display: none; }
+
+.phase-circle {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--border);
+  border: 2px solid var(--border);
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+}
+
+.phase-dot.done   .phase-circle { background: var(--green); border-color: var(--green); }
+.phase-dot.running .phase-circle { background: var(--accent); border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74,158,255,0.3);
+  animation: pulse 1.5s infinite;
+}
+.phase-dot.failed  .phase-circle { background: var(--red); border-color: var(--red); }
+
+.phase-dot.done::before, .phase-dot.running::before { background: var(--green); }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(74,158,255,0.3); }
+  50%       { box-shadow: 0 0 0 6px rgba(74,158,255,0.1); }
+}
+
+.phase-name {
+  font-size: 9px;
+  color: var(--dim);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50px;
+}
+
+.phase-dot.done   .phase-name { color: var(--green); }
+.phase-dot.running .phase-name { color: var(--accent); }
+.phase-dot.failed  .phase-name { color: var(--red); }
+
+/* ─── Card actions ──────────────────────────────────────────────────────────── */
+.vm-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.error-msg {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: rgba(231,76,60,0.1);
+  border: 1px solid rgba(231,76,60,0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--red);
+  word-break: break-word;
+}
+
+/* ─── Log drawer ────────────────────────────────────────────────────────────── */
+.log-drawer {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  height: 340px;
+  background: #0a0c14;
+  border-top: 1px solid var(--border);
+  transform: translateY(100%);
+  transition: transform 0.3s ease;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-drawer.open { transform: translateY(0); }
+
+.log-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.log-drawer-title { font-size: 13px; font-weight: 600; }
+.log-drawer-vm { color: var(--accent); }
+
+.log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 16px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.log-line { padding: 1px 0; }
+.log-ts   { color: var(--dim); margin-right: 8px; }
+.log-INFO    { color: var(--text); }
+.log-DEBUG   { color: var(--dim); }
+.log-WARNING { color: var(--yellow); }
+.log-ERROR   { color: var(--red); }
+.log-CRITICAL{ color: var(--red); font-weight: 700; }
+
+/* ─── Footer bar ────────────────────────────────────────────────────────────── */
+.page-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+/* ─── Alert ─────────────────────────────────────────────────────────────────── */
+.alert {
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  display: none;
+}
+
+.alert.visible { display: block; }
+.alert-error { background: rgba(231,76,60,0.1); border: 1px solid rgba(231,76,60,0.4); color: #f87171; }
+.alert-info  { background: rgba(74,158,255,0.1); border: 1px solid rgba(74,158,255,0.4); color: #93c5fd; }
+
+/* ─── Spinner ───────────────────────────────────────────────────────────────── */
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.2);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─── Empty state ───────────────────────────────────────────────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+
+.empty-state p { margin-top: 8px; font-size: 13px; }
+
+/* ─── Export sub-progress ───────────────────────────────────────────────────── */
+.export-progress-box {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+.exp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.exp-disk-label { color: var(--text); font-weight: 500; }
+.exp-speed      { color: var(--accent); font-weight: 600; font-size: 13px; }
+.exp-track {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 5px;
+}
+.exp-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), #7cc4ff);
+  border-radius: 4px;
+  transition: width 0.6s ease;
+}
+.exp-fill.indeterminate {
+  width: 40% !important;
+  animation: exp-slide 1.4s ease-in-out infinite;
+}
+@keyframes exp-slide {
+  0%   { margin-left: 0%;   }
+  50%  { margin-left: 60%;  }
+  100% { margin-left: 0%;   }
+}
+.exp-stats { font-size: 11px; color: var(--text-dim); display: flex; gap: 16px; }
+
+/* ─── Responsive ────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .connect-grid, .select-grid { grid-template-columns: 1fr; }
+  .vm-cards { grid-template-columns: 1fr; }
+  .topbar { padding: 0 16px; }
+  .main { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ─── Topbar ──────────────────────────────────────────────────────────────── -->
+<nav class="topbar">
+  <div class="topbar-brand">vmigrate <span>— VMware to Proxmox</span></div>
+  <div class="steps">
+    <button class="step-btn active" id="step-btn-1" onclick="goToStep(1)">
+      <span class="step-num">1</span> Connect
+    </button>
+    <button class="step-btn" id="step-btn-2" onclick="goToStep(2)" disabled>
+      <span class="step-num">2</span> Select VMs
+    </button>
+    <button class="step-btn" id="step-btn-3" onclick="goToStep(3)" disabled>
+      <span class="step-num">3</span> Migrate
+    </button>
+  </div>
+</nav>
+
+<!-- ─── Main ────────────────────────────────────────────────────────────────── -->
+<main class="main">
+
+<!-- ════════════════════════════════════════════════════════════════════════════
+     STEP 1 — Connect
+     ════════════════════════════════════════════════════════════════════════════ -->
+<section class="page active" id="page-1">
+  <div class="connect-grid">
+
+    <!-- VMware Source -->
+    <div class="card">
+      <div class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        VMware vSphere <span style="color:var(--dim);font-size:12px;font-weight:400;margin-left:8px">Source</span>
+        <span class="badge badge-idle" id="vmware-badge" style="margin-left:auto">Not connected</span>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">vCenter Host / IP</label>
+          <input type="text" id="vmw-host" placeholder="vcenter.company.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Port</label>
+          <input type="number" id="vmw-port" value="443" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input type="text" id="vmw-user" placeholder="administrator@vsphere.local" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="vmw-pass" placeholder="••••••••" />
+        </div>
+        <div class="form-group full">
+          <label class="form-label">Datacenter Name</label>
+          <input type="text" id="vmw-dc" placeholder="DC1" />
+        </div>
+        <div class="form-group full">
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" id="vmw-ssl">
+              <div class="toggle-track"></div>
+              <div class="toggle-thumb"></div>
+            </label>
+            <span class="form-label">Disable SSL verification (self-signed certs)</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn btn-primary" id="vmw-connect-btn" onclick="testVmware()">
+          Test Connection
+        </button>
+      </div>
+
+      <div class="conn-status" id="vmw-status" style="display:none"></div>
+    </div>
+
+    <!-- Proxmox Destination -->
+    <div class="card">
+      <div class="card-title">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Proxmox VE <span style="color:var(--dim);font-size:12px;font-weight:400;margin-left:8px">Destination</span>
+        <span class="badge badge-idle" id="prx-badge" style="margin-left:auto">Not connected</span>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Proxmox Host / IP</label>
+          <input type="text" id="prx-host" placeholder="pve01.company.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Port</label>
+          <input type="number" id="prx-port" value="8006" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input type="text" id="prx-user" value="root@pam" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="prx-pass" placeholder="••••••••" />
+        </div>
+        <div class="form-group full">
+          <label class="form-label">Target Node Name</label>
+          <input type="text" id="prx-node" placeholder="pve01" />
+        </div>
+        <div class="form-group full">
+          <label class="form-label">
+            Cluster Node IPs
+            <span style="font-weight:400;color:var(--text-dim);font-size:11px;margin-left:8px">
+              Comma-separated IPs of all Proxmox nodes (needed for SSH disk import in multi-node clusters)
+            </span>
+          </label>
+          <input type="text" id="prx-cluster-ips" placeholder="10.14.2.73, 10.14.2.74, 10.14.2.75" />
+        </div>
+        <div class="form-group full">
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" id="prx-ssl">
+              <div class="toggle-track"></div>
+              <div class="toggle-thumb"></div>
+            </label>
+            <span class="form-label">Disable SSL verification (self-signed certs)</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn btn-primary" id="prx-connect-btn" onclick="testProxmox()">
+          Test Connection
+        </button>
+      </div>
+
+      <div class="conn-status" id="prx-status" style="display:none"></div>
+    </div>
+
+  </div><!-- /connect-grid -->
+
+  <div class="page-footer">
+    <span id="both-status-msg" style="color:var(--text-dim);font-size:13px">
+      Connect to both systems to continue.
+    </span>
+    <button class="btn btn-primary" id="next-to-step2" onclick="goToStep(2)" disabled>
+      Next: Select VMs &rarr;
+    </button>
+  </div>
+</section>
+
+
+<!-- ════════════════════════════════════════════════════════════════════════════
+     STEP 2 — Select VMs & Resources
+     ════════════════════════════════════════════════════════════════════════════ -->
+<section class="page" id="page-2">
+
+  <div id="step2-alert" class="alert alert-error"></div>
+
+  <div class="select-grid">
+
+    <!-- Left: VM list -->
+    <div class="card" style="padding:0;overflow:hidden;">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <span class="card-title" style="margin:0;padding:0;border:none;font-size:15px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            Virtual Machines
+          </span>
+          <button class="btn btn-outline btn-sm" onclick="refreshVMs()">Refresh</button>
+        </div>
+        <div class="search-bar">
+          <input type="text" id="vm-search" placeholder="Filter VMs..." oninput="filterVMs()" />
+          <span class="selected-count" id="selected-count">0 selected</span>
+        </div>
+      </div>
+
+      <div class="table-wrap" style="max-height:520px;overflow-y:auto;">
+        <table id="vm-table">
+          <thead>
+            <tr>
+              <th style="width:36px"><input type="checkbox" id="select-all" onchange="toggleSelectAll()" /></th>
+              <th>Name</th>
+              <th>OS</th>
+              <th>CPUs</th>
+              <th>RAM</th>
+              <th>Disk</th>
+              <th>Power</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody id="vm-tbody">
+            <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--dim);">
+              <div class="spinner" style="display:inline-block;margin-right:8px;"></div> Loading VMs...
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Right: Resource mapping -->
+    <div style="display:flex;flex-direction:column;gap:16px;">
+
+      <!-- Global defaults -->
+      <div class="card">
+        <div class="card-title" style="font-size:13px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+          Global Defaults
+        </div>
+
+        <div class="resource-row">
+          <label class="form-label">Target Node</label>
+          <select id="global-node" onchange="updatePerVmFromGlobal()">
+            <option value="">-- Loading nodes... --</option>
+          </select>
+        </div>
+        <div class="resource-row">
+          <label class="form-label">Storage Pool</label>
+          <select id="global-storage" onchange="updatePerVmFromGlobal()">
+            <option value="">-- select node first --</option>
+          </select>
+        </div>
+        <div class="resource-row">
+          <label class="form-label">Network Bridge</label>
+          <select id="global-network" onchange="updatePerVmFromGlobal()">
+            <option value="">-- select node first --</option>
+          </select>
+        </div>
+        <div class="resource-row">
+          <label class="form-label">Migration Mode</label>
+          <select id="global-mode" onchange="updatePerVmFromGlobal()">
+            <option value="cold">Cold (maintenance window, safest)</option>
+            <option value="live">Live (low-downtime, CBT-based)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Per-VM overrides -->
+      <div class="card" id="per-vm-card" style="display:none;">
+        <div class="card-title" style="font-size:13px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          Per-VM Overrides
+        </div>
+        <div class="per-vm-list" id="per-vm-list"></div>
+      </div>
+
+    </div>
+  </div><!-- /select-grid -->
+
+  <div class="page-footer">
+    <button class="btn btn-outline" onclick="goToStep(1)">&larr; Back</button>
+    <button class="btn btn-success" id="start-migrate-btn" onclick="startMigration()" disabled>
+      Start Migration &rarr;
+    </button>
+  </div>
+</section>
+
+
+<!-- ════════════════════════════════════════════════════════════════════════════
+     STEP 3 — Migration Dashboard
+     ════════════════════════════════════════════════════════════════════════════ -->
+<section class="page" id="page-3">
+
+  <!-- Summary bar -->
+  <div class="summary-bar">
+    <div class="summary-card total">
+      <div class="summary-number" id="stat-total">0</div>
+      <div class="summary-label">Total VMs</div>
+    </div>
+    <div class="summary-card running">
+      <div class="summary-number" id="stat-running">0</div>
+      <div class="summary-label">Running</div>
+    </div>
+    <div class="summary-card completed">
+      <div class="summary-number" id="stat-completed">0</div>
+      <div class="summary-label">Completed</div>
+    </div>
+    <div class="summary-card failed">
+      <div class="summary-number" id="stat-failed">0</div>
+      <div class="summary-label">Failed</div>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+      <span id="poll-indicator" style="font-size:11px;color:var(--dim);">Auto-refresh every 3s</span>
+      <button class="btn btn-outline btn-sm" onclick="stopPolling()" id="stop-poll-btn">Pause</button>
+    </div>
+  </div>
+
+  <!-- VM cards grid -->
+  <div class="vm-cards" id="vm-cards-grid">
+    <div class="empty-state">
+      <p>No migration running yet.</p>
+    </div>
+  </div>
+
+</section>
+
+</main><!-- /main -->
+</div><!-- /app -->
+
+<!-- ─── Log Drawer ───────────────────────────────────────────────────────────── -->
+<div class="log-drawer" id="log-drawer">
+  <div class="log-drawer-header">
+    <span class="log-drawer-title">Logs — <span class="log-drawer-vm" id="log-drawer-vm-name"></span></span>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-outline btn-sm" onclick="clearLogs()">Clear</button>
+      <button class="btn btn-outline btn-sm" onclick="closeLogDrawer()">Close</button>
+    </div>
+  </div>
+  <div class="log-body" id="log-body"></div>
+</div>
+
+<script>
+/* ──────────────────────────────────────────────────────────────────────────────
+   State
+   ────────────────────────────────────────────────────────────────────────────── */
+const state = {
+  vmwareConnected: false,
+  proxmoxConnected: false,
+  vms: [],           // raw VM list from API
+  filteredVms: [],   // after search filter
+  selectedVms: new Set(),
+  nodes: [],
+  storages: [],
+  networks: [],
+  perVmOverrides: {},  // vm_name → {node, storage, network, mode}
+  jobId: null,
+  pollTimer: null,
+  logSource: null,
+  logVm: null,
+};
+
+const PHASES = [
+  'PREFLIGHT','SNAPSHOT_CREATE','EXPORT_DISK','CONVERT_DISK','VERIFY_DISK',
+  'PROXMOX_VM_CREATE','PROXMOX_DISK_IMPORT','DRIVER_INJECT','PROXMOX_NETWORK',
+  'PROXMOX_START','SNAPSHOT_REMOVE','AGENT_INSTALL','COMPLETED'
+];
+
+const PHASE_LABELS = {
+  PREFLIGHT:'Preflight', SNAPSHOT_CREATE:'Snapshot', EXPORT_DISK:'Export',
+  CONVERT_DISK:'Convert', VERIFY_DISK:'Verify', PROXMOX_VM_CREATE:'VM Create',
+  PROXMOX_DISK_IMPORT:'Disk Import', DRIVER_INJECT:'Drivers',
+  PROXMOX_NETWORK:'Network', PROXMOX_START:'Start VM',
+  SNAPSHOT_REMOVE:'Cleanup', AGENT_INSTALL:'Agent', COMPLETED:'Done',
+};
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Navigation
+   ────────────────────────────────────────────────────────────────────────────── */
+function goToStep(n) {
+  document.querySelectorAll('.page').forEach((p, i) => {
+    p.classList.toggle('active', i + 1 === n);
+  });
+  document.querySelectorAll('.step-btn').forEach((b, i) => {
+    b.classList.remove('active');
+    if (i + 1 === n) b.classList.add('active');
+  });
+  if (n === 2) {
+    loadProxmoxResources();
+    loadVMs();
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   API helpers
+   ────────────────────────────────────────────────────────────────────────────── */
+async function api(method, path, body) {
+  const opts = {
+    method,
+    credentials: 'same-origin',
+    headers: body ? {'Content-Type': 'application/json'} : {},
+    body: body ? JSON.stringify(body) : undefined,
+  };
+  const res = await fetch('/api' + path, opts);
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Step 1 — Connection tests
+   ────────────────────────────────────────────────────────────────────────────── */
+async function testVmware() {
+  const btn = document.getElementById('vmw-connect-btn');
+  const badge = document.getElementById('vmware-badge');
+  const statusEl = document.getElementById('vmw-status');
+
+  badge.className = 'badge badge-testing';
+  badge.textContent = 'Testing...';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Connecting...';
+  statusEl.style.display = 'none';
+
+  const body = {
+    host: v('vmw-host'), port: parseInt(v('vmw-port')) || 443,
+    username: v('vmw-user'), password: v('vmw-pass'),
+    datacenter: v('vmw-dc'), verify_ssl: !document.getElementById('vmw-ssl').checked,
+  };
+
+  const { ok, data } = await api('POST', '/vmware/connect', body);
+
+  btn.disabled = false;
+  btn.textContent = 'Test Connection';
+
+  if (data.success) {
+    badge.className = 'badge badge-connected';
+    badge.textContent = 'Connected';
+    statusEl.className = 'conn-status ok';
+    statusEl.style.display = 'flex';
+    const d = data.details || {};
+    statusEl.innerHTML = `
+      <div class="conn-detail">
+        <strong>${data.message}</strong>
+        <div class="conn-kv">
+          ${d.full_name ? `<span><strong>Version:</strong> ${d.full_name}</span>` : ''}
+          ${d.datacenter ? `<span><strong>Datacenter:</strong> ${d.datacenter}</span>` : ''}
+        </div>
+      </div>`;
+    state.vmwareConnected = true;
+  } else {
+    badge.className = 'badge badge-error';
+    badge.textContent = 'Failed';
+    statusEl.className = 'conn-status fail';
+    statusEl.style.display = 'flex';
+    statusEl.textContent = data.message || 'Connection failed.';
+    state.vmwareConnected = false;
+  }
+  updateStep1Footer();
+}
+
+async function testProxmox() {
+  const btn = document.getElementById('prx-connect-btn');
+  const badge = document.getElementById('prx-badge');
+  const statusEl = document.getElementById('prx-status');
+
+  badge.className = 'badge badge-testing';
+  badge.textContent = 'Testing...';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Connecting...';
+  statusEl.style.display = 'none';
+
+  const clusterIps = v('prx-cluster-ips').split(',').map(s => s.trim()).filter(Boolean);
+  const body = {
+    host: v('prx-host'), port: parseInt(v('prx-port')) || 8006,
+    user: v('prx-user'), password: v('prx-pass'),
+    node: v('prx-node'), verify_ssl: !document.getElementById('prx-ssl').checked,
+    cluster_ips: clusterIps,
+  };
+
+  const { ok, data } = await api('POST', '/proxmox/connect', body);
+
+  btn.disabled = false;
+  btn.textContent = 'Test Connection';
+
+  if (data.success) {
+    badge.className = 'badge badge-connected';
+    badge.textContent = 'Connected';
+    statusEl.className = 'conn-status ok';
+    statusEl.style.display = 'flex';
+    const d = data.details || {};
+    statusEl.innerHTML = `
+      <div class="conn-detail">
+        <strong>${data.message}</strong>
+        <div class="conn-kv">
+          ${d.pve_version ? `<span><strong>PVE:</strong> ${d.pve_version}</span>` : ''}
+          ${d.memory_free_gb != null ? `<span><strong>RAM free:</strong> ${d.memory_free_gb} GB</span>` : ''}
+        </div>
+      </div>`;
+    state.proxmoxConnected = true;
+  } else {
+    badge.className = 'badge badge-error';
+    badge.textContent = 'Failed';
+    statusEl.className = 'conn-status fail';
+    statusEl.style.display = 'flex';
+    statusEl.textContent = data.message || 'Connection failed.';
+    state.proxmoxConnected = false;
+  }
+  updateStep1Footer();
+}
+
+function updateStep1Footer() {
+  const both = state.vmwareConnected && state.proxmoxConnected;
+  document.getElementById('next-to-step2').disabled = !both;
+  document.getElementById('step-btn-2').disabled = !both;
+  document.getElementById('both-status-msg').textContent = both
+    ? 'Both systems connected. Ready to select VMs.'
+    : 'Connect to both systems to continue.';
+  if (both) {
+    document.getElementById('step-btn-1').classList.add('done');
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Step 2 — VMs
+   ────────────────────────────────────────────────────────────────────────────── */
+async function loadVMs() {
+  const tbody = document.getElementById('vm-tbody');
+  tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--dim);"><div class="spinner" style="display:inline-block;margin-right:8px;"></div> Loading VMs from vCenter...</td></tr>';
+
+  const { ok, data } = await api('GET', '/vmware/vms');
+  if (!ok || !Array.isArray(data)) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--red);">Failed to load VMs: ${data.detail || 'Unknown error'}</td></tr>`;
+    return;
+  }
+
+  state.vms = data;
+  state.filteredVms = data;
+  renderVMTable();
+}
+
+function filterVMs() {
+  const q = document.getElementById('vm-search').value.toLowerCase();
+  state.filteredVms = state.vms.filter(vm =>
+    vm.name.toLowerCase().includes(q) || vm.guest_os.toLowerCase().includes(q)
+  );
+  renderVMTable();
+}
+
+function renderVMTable() {
+  const tbody = document.getElementById('vm-tbody');
+  if (!state.filteredVms.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--dim);">No VMs found.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = state.filteredVms.map(vm => {
+    const checked = state.selectedVms.has(vm.name) ? 'checked' : '';
+    const osClass = vm.is_windows ? 'os-win' : 'os-linux';
+    const osLabel = vm.is_windows ? 'Windows' : 'Linux';
+    const powerClass = vm.power_state.includes('On') ? 'power-on' : 'power-off';
+    const powerLabel = vm.power_state.includes('On') ? 'On' : 'Off';
+    const totalDisk = vm.disks.reduce((s, d) => s + d.size_gb, 0).toFixed(0);
+    const ramGb = (vm.memory_mb / 1024).toFixed(1);
+
+    return `<tr>
+      <td><input type="checkbox" ${checked} onchange="toggleVM('${escHtml(vm.name)}', this.checked)" /></td>
+      <td class="vm-name-cell">${escHtml(vm.name)}</td>
+      <td><span class="os-badge ${osClass}">${osLabel}</span></td>
+      <td>${vm.num_cpus}</td>
+      <td>${ramGb} GB</td>
+      <td>${totalDisk} GB</td>
+      <td class="${powerClass}">${powerLabel}</td>
+      <td>
+        <select style="padding:4px 6px;font-size:12px;" onchange="setVmMode('${escHtml(vm.name)}', this.value)">
+          <option value="cold" ${getVmOverride(vm.name,'mode','cold')==='cold'?'selected':''}>Cold</option>
+          <option value="live" ${getVmOverride(vm.name,'mode','cold')==='live'?'selected':''}>Live</option>
+        </select>
+      </td>
+    </tr>`;
+  }).join('');
+
+  updateSelectionState();
+}
+
+function toggleVM(vmName, checked) {
+  if (checked) state.selectedVms.add(vmName);
+  else state.selectedVms.delete(vmName);
+  updateSelectionState();
+  renderPerVmOverrides();
+}
+
+function toggleSelectAll() {
+  const allChecked = document.getElementById('select-all').checked;
+  state.filteredVms.forEach(vm => {
+    if (allChecked) state.selectedVms.add(vm.name);
+    else state.selectedVms.delete(vm.name);
+  });
+  renderVMTable();
+  renderPerVmOverrides();
+}
+
+function updateSelectionState() {
+  const count = state.selectedVms.size;
+  document.getElementById('selected-count').textContent = `${count} selected`;
+  document.getElementById('start-migrate-btn').disabled = count === 0;
+  // Update select-all checkbox state
+  const all = document.getElementById('select-all');
+  if (count === 0) { all.indeterminate = false; all.checked = false; }
+  else if (count === state.filteredVms.length) { all.indeterminate = false; all.checked = true; }
+  else { all.indeterminate = true; }
+}
+
+function setVmMode(vmName, mode) {
+  if (!state.perVmOverrides[vmName]) state.perVmOverrides[vmName] = {};
+  state.perVmOverrides[vmName].mode = mode;
+}
+
+function getVmOverride(vmName, key, fallback) {
+  return state.perVmOverrides[vmName]?.[key] ?? fallback;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Step 2 — Proxmox resources
+   ────────────────────────────────────────────────────────────────────────────── */
+async function loadProxmoxResources() {
+  const [nodesRes, storRes, netRes] = await Promise.all([
+    api('GET', '/proxmox/nodes'),
+    api('GET', '/proxmox/storage'),
+    api('GET', '/proxmox/networks'),
+  ]);
+
+  // Nodes
+  if (nodesRes.ok && Array.isArray(nodesRes.data)) {
+    state.nodes = nodesRes.data;
+    const sel = document.getElementById('global-node');
+    sel.innerHTML = nodesRes.data.map(n =>
+      `<option value="${escHtml(n.name)}">${escHtml(n.name)} (CPU: ${Math.round(n.cpu_usage*100)}%, RAM: ${n.memory_used_gb}/${n.memory_total_gb} GB)</option>`
+    ).join('');
+    if (nodesRes.data.length) {
+      await loadNodeResources(nodesRes.data[0].name, storRes, netRes);
+    }
+  }
+
+  document.getElementById('global-node').addEventListener('change', async (e) => {
+    const node = e.target.value;
+    const [s, n] = await Promise.all([
+      api('GET', `/proxmox/storage?node=${node}`),
+      api('GET', `/proxmox/networks?node=${node}`),
+    ]);
+    populateStorageSelect(s.data || []);
+    populateNetworkSelect(n.data || []);
+    renderPerVmOverrides();
+  });
+}
+
+async function loadNodeResources(node, storRes, netRes) {
+  const storData = storRes?.ok ? storRes.data : (await api('GET', `/proxmox/storage?node=${node}`)).data;
+  const netData  = netRes?.ok  ? netRes.data  : (await api('GET', `/proxmox/networks?node=${node}`)).data;
+  populateStorageSelect(storData || []);
+  populateNetworkSelect(netData  || []);
+}
+
+function populateStorageSelect(storages) {
+  state.storages = storages;
+  const sel = document.getElementById('global-storage');
+  sel.innerHTML = storages.length
+    ? storages.map(s => `<option value="${escHtml(s.name)}">${escHtml(s.name)} (${s.type}, ${s.avail_gb} GB free)</option>`).join('')
+    : '<option value="">-- no compatible storage found --</option>';
+}
+
+function populateNetworkSelect(networks) {
+  state.networks = networks;
+  const sel = document.getElementById('global-network');
+  sel.innerHTML = networks.length
+    ? networks.map(n => `<option value="${escHtml(n.name)}">${escHtml(n.name)}${n.active ? ' (active)' : ''}</option>`).join('')
+    : '<option value="">-- no bridges found --</option>';
+}
+
+function updatePerVmFromGlobal() {
+  // When global defaults change, re-render per-VM section but don't force override
+  renderPerVmOverrides();
+}
+
+function renderPerVmOverrides() {
+  const card = document.getElementById('per-vm-card');
+  const list = document.getElementById('per-vm-list');
+
+  if (state.selectedVms.size === 0) {
+    card.style.display = 'none';
+    return;
+  }
+
+  card.style.display = 'block';
+  const globalNode    = document.getElementById('global-node').value;
+  const globalStorage = document.getElementById('global-storage').value;
+  const globalNetwork = document.getElementById('global-network').value;
+  const globalMode    = document.getElementById('global-mode').value;
+
+  list.innerHTML = [...state.selectedVms].map(vmName => {
+    const ov = state.perVmOverrides[vmName] || {};
+    const nodeOpts = state.nodes.map(n =>
+      `<option value="${escHtml(n.name)}" ${(ov.node||globalNode)===n.name?'selected':''}>${escHtml(n.name)}</option>`).join('');
+    const storOpts = state.storages.map(s =>
+      `<option value="${escHtml(s.name)}" ${(ov.storage||globalStorage)===s.name?'selected':''}>${escHtml(s.name)} (${s.avail_gb}GB)</option>`).join('');
+    const netOpts = state.networks.map(n =>
+      `<option value="${escHtml(n.name)}" ${(ov.network||globalNetwork)===n.name?'selected':''}>${escHtml(n.name)}</option>`).join('');
+
+    return `<div class="per-vm-item">
+      <h5>${escHtml(vmName)}</h5>
+      <label class="resource-label">Node</label>
+      <select onchange="setVmOverride('${escHtml(vmName)}','node',this.value)">${nodeOpts}</select>
+      <label class="resource-label">Storage</label>
+      <select onchange="setVmOverride('${escHtml(vmName)}','storage',this.value)">${storOpts}</select>
+      <label class="resource-label">Network Bridge</label>
+      <select onchange="setVmOverride('${escHtml(vmName)}','network',this.value)">${netOpts}</select>
+    </div>`;
+  }).join('');
+}
+
+function setVmOverride(vmName, key, value) {
+  if (!state.perVmOverrides[vmName]) state.perVmOverrides[vmName] = {};
+  state.perVmOverrides[vmName][key] = value;
+}
+
+async function refreshVMs() { await loadVMs(); }
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Start migration
+   ────────────────────────────────────────────────────────────────────────────── */
+async function startMigration() {
+  if (state.selectedVms.size === 0) return;
+
+  const globalNode    = document.getElementById('global-node').value;
+  const globalStorage = document.getElementById('global-storage').value;
+  const globalNetwork = document.getElementById('global-network').value;
+  const globalMode    = document.getElementById('global-mode').value;
+
+  if (!globalNode || !globalStorage || !globalNetwork) {
+    showStep2Alert('Select a target node, storage pool, and network bridge before starting.');
+    return;
+  }
+
+  const mappings = [...state.selectedVms].map(vmName => {
+    const ov = state.perVmOverrides[vmName] || {};
+    return {
+      vm_name:         vmName,
+      target_node:     ov.node    || globalNode,
+      storage:         ov.storage || globalStorage,
+      network_bridge:  ov.network || globalNetwork,
+      migration_mode:  ov.mode    || globalMode,
+    };
+  });
+
+  const btn = document.getElementById('start-migrate-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Starting...';
+
+  const { ok, data } = await api('POST', '/migrate/start', { mappings });
+
+  btn.disabled = false;
+  btn.textContent = 'Start Migration →';
+
+  if (!ok || !data.job_id) {
+    showStep2Alert(data.detail || data.message || 'Failed to start migration.');
+    return;
+  }
+
+  state.jobId = data.job_id;
+  document.getElementById('step-btn-3').disabled = false;
+  goToStep(3);
+  startPolling();
+}
+
+function showStep2Alert(msg) {
+  const el = document.getElementById('step2-alert');
+  el.textContent = msg;
+  el.classList.add('visible');
+  setTimeout(() => el.classList.remove('visible'), 6000);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Step 3 — Dashboard polling
+   ────────────────────────────────────────────────────────────────────────────── */
+/* ──────────────────────────────────────────────────────────────────────────────
+   Export sub-progress polling (every 2s, only during EXPORT_DISK phase)
+   ────────────────────────────────────────────────────────────────────────────── */
+const _exportPollers = {};  // vm_name → intervalId
+
+function _startExportPoller(vmName) {
+  if (_exportPollers[vmName]) return;
+  _exportPollers[vmName] = setInterval(() => _pollExportProgress(vmName), 2000);
+  _pollExportProgress(vmName);
+}
+
+function _stopExportPoller(vmName) {
+  if (_exportPollers[vmName]) {
+    clearInterval(_exportPollers[vmName]);
+    delete _exportPollers[vmName];
+  }
+}
+
+async function _pollExportProgress(vmName) {
+  const boxId = `exp-${vmName.replace(/[^a-z0-9]/gi, '_')}`;
+  const box = document.getElementById(boxId);
+  if (!box) { _stopExportPoller(vmName); return; }
+
+  const { ok, data } = await api('GET', `/migrate/export-progress/${encodeURIComponent(vmName)}`);
+  if (!ok || !data || data.pct === undefined) return;
+
+  const { disk_label, disk_index, disk_count, pct, downloaded_mb, total_mb, speed_mbps, eta_s, size_known } = data;
+  const fill = box.querySelector('.exp-fill');
+
+  if (size_known === false) {
+    // Content-Length unknown — show indeterminate sliding bar
+    box.querySelector('.exp-disk-label').textContent =
+      `${disk_label || 'Disk'}  (${disk_index}/${disk_count})  —  ${downloaded_mb.toFixed(0)} MB downloaded`;
+    box.querySelector('.exp-speed').textContent =
+      speed_mbps > 0 ? `${speed_mbps.toFixed(1)} MB/s` : '';
+    fill.classList.add('indeterminate');
+    box.querySelector('.exp-stats').innerHTML =
+      `<span>Size unknown — streaming from ESXi</span>`;
+  } else {
+    fill.classList.remove('indeterminate');
+    box.querySelector('.exp-disk-label').textContent =
+      `${disk_label || 'Disk'}  (${disk_index}/${disk_count})  —  ${pct}%`;
+    box.querySelector('.exp-speed').textContent =
+      speed_mbps > 0 ? `${speed_mbps.toFixed(1)} MB/s` : '';
+    fill.style.width = `${pct}%`;
+
+    const etaText = eta_s > 60
+      ? `ETA ${Math.round(eta_s / 60)}m ${eta_s % 60}s`
+      : eta_s > 0 ? `ETA ${eta_s}s` : '';
+    box.querySelector('.exp-stats').innerHTML =
+      `<span>${downloaded_mb.toFixed(0)} / ${total_mb.toFixed(0)} MB</span>
+       <span>${etaText}</span>`;
+
+    if (pct >= 100) _stopExportPoller(vmName);
+  }
+}
+
+function startPolling() {
+  pollStatus();
+  state.pollTimer = setInterval(pollStatus, 3000);
+}
+
+function stopPolling() {
+  if (state.pollTimer) {
+    clearInterval(state.pollTimer);
+    state.pollTimer = null;
+    document.getElementById('poll-indicator').textContent = 'Paused';
+    document.getElementById('stop-poll-btn').textContent = 'Resume';
+    document.getElementById('stop-poll-btn').onclick = resumePolling;
+  }
+}
+
+function resumePolling() {
+  document.getElementById('poll-indicator').textContent = 'Auto-refresh every 3s';
+  document.getElementById('stop-poll-btn').textContent = 'Pause';
+  document.getElementById('stop-poll-btn').onclick = stopPolling;
+  pollStatus();
+  state.pollTimer = setInterval(pollStatus, 3000);
+}
+
+async function pollStatus() {
+  const { ok, data } = await api('GET', `/migrate/status${state.jobId ? '?job_id=' + state.jobId : ''}`);
+  if (!ok || !Array.isArray(data) || !data.length) return;
+
+  // Update summary
+  const total = data.length;
+  const running   = data.filter(v => v.status === 'RUNNING').length;
+  const completed = data.filter(v => v.phase === 'COMPLETED').length;
+  const failed    = data.filter(v => v.status === 'FAILED').length;
+
+  document.getElementById('stat-total').textContent    = total;
+  document.getElementById('stat-running').textContent  = running;
+  document.getElementById('stat-completed').textContent = completed;
+  document.getElementById('stat-failed').textContent   = failed;
+
+  // Render cards
+  renderVMCards(data);
+
+  // Stop polling when all done
+  if (running === 0 && (completed + failed) === total) {
+    stopPolling();
+    document.getElementById('poll-indicator').textContent = 'All VMs finished.';
+  }
+}
+
+function renderVMCards(statuses) {
+  const grid = document.getElementById('vm-cards-grid');
+  grid.innerHTML = statuses.map(vm => vmCardHTML(vm)).join('');
+
+  // Start/stop export sub-progress pollers based on current phase
+  statuses.forEach(vm => {
+    if (vm.phase === 'EXPORT_DISK' && vm.status === 'RUNNING') {
+      _startExportPoller(vm.vm_name);
+    } else {
+      _stopExportPoller(vm.vm_name);
+    }
+  });
+}
+
+function vmCardHTML(vm) {
+  const statusClass = vm.status === 'RUNNING' ? 'running'
+    : vm.phase === 'COMPLETED' ? 'completed'
+    : vm.status === 'FAILED'   ? 'failed'
+    : 'pending';
+
+  const statusLabel = vm.phase === 'COMPLETED' ? 'Completed'
+    : vm.status === 'RUNNING' ? 'Running'
+    : vm.status === 'FAILED'  ? 'Failed'
+    : 'Pending';
+
+  const fillClass = vm.phase === 'COMPLETED' ? 'done' : vm.status === 'FAILED' ? 'error' : '';
+
+  // Phase timeline
+  const timeline = phaseTimelineHTML(vm.phase, vm.status);
+
+  // Error
+  const errorHTML = vm.error ? `<div class="error-msg">${escHtml(vm.error)}</div>` : '';
+
+  // Action buttons
+  const retryBtn    = vm.status === 'FAILED'
+    ? `<button class="btn btn-outline btn-sm" onclick="retryVM('${escHtml(vm.vm_name)}')">Retry</button>` : '';
+  const rollbackBtn = (vm.status === 'FAILED' || vm.phase === 'COMPLETED')
+    ? `<button class="btn btn-danger btn-sm" onclick="rollbackVM('${escHtml(vm.vm_name)}')">Rollback</button>` : '';
+  const resetBtn    = (vm.phase === 'COMPLETED' || vm.status === 'FAILED')
+    ? `<button class="btn btn-outline btn-sm" style="color:var(--yellow);border-color:var(--yellow)" title="Clear state DB and re-run all phases from scratch" onclick="resetVM('${escHtml(vm.vm_name)}')">Reset &amp; Re-run</button>` : '';
+
+  const phaseLabel = PHASE_LABELS[vm.phase] || vm.phase;
+  const exportProgressId = `exp-${escHtml(vm.vm_name).replace(/[^a-z0-9]/gi,'_')}`;
+
+  return `<div class="vm-card status-${statusClass}">
+    <div class="vm-card-header">
+      <span class="vm-card-name">${escHtml(vm.vm_name)}</span>
+      <span class="vm-card-status ${statusClass}">${statusLabel}</span>
+    </div>
+    <div class="vm-phase-label">Phase: <strong>${phaseLabel}</strong></div>
+    <div class="progress-track">
+      <div class="progress-fill ${fillClass}" style="width:${vm.progress_pct}%"></div>
+    </div>
+    ${vm.phase === 'EXPORT_DISK' && vm.status === 'RUNNING' ? `
+    <div id="${exportProgressId}" class="export-progress-box">
+      <div class="exp-header">
+        <span class="exp-disk-label">Waiting for export to start...</span>
+        <span class="exp-speed"></span>
+      </div>
+      <div class="exp-track"><div class="exp-fill" style="width:0%"></div></div>
+      <div class="exp-stats"></div>
+    </div>` : ''}
+    ${timeline}
+    ${errorHTML}
+    <div class="vm-card-actions">
+      <button class="btn btn-outline btn-sm" onclick="openLogs('${escHtml(vm.vm_name)}')">View Logs</button>
+      ${retryBtn}
+      ${rollbackBtn}
+      ${resetBtn}
+    </div>
+  </div>`;
+}
+
+function phaseTimelineHTML(currentPhase, currentStatus) {
+  let reachedCurrent = false;
+  const dots = PHASES.map(phase => {
+    let dotClass = '';
+    if (phase === currentPhase) {
+      dotClass = currentStatus === 'FAILED' ? 'failed' : 'running';
+      reachedCurrent = true;
+    } else if (!reachedCurrent) {
+      dotClass = 'done';
+    }
+    const label = PHASE_LABELS[phase] || phase;
+    return `<div class="phase-dot ${dotClass}">
+      <div class="phase-circle"></div>
+      <span class="phase-name">${label}</span>
+    </div>`;
+  });
+  return `<div class="phase-timeline">${dots.join('')}</div>`;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Actions
+   ────────────────────────────────────────────────────────────────────────────── */
+async function retryVM(vmName) {
+  const { ok, data } = await api('POST', `/migrate/retry/${encodeURIComponent(vmName)}`);
+  if (!ok) { alert('Retry failed: ' + (data.detail || 'Unknown error')); return; }
+  // Restart polling and poll immediately multiple times to catch fast completions
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  document.getElementById('poll-indicator').textContent = 'Auto-refresh every 3s';
+  document.getElementById('stop-poll-btn').textContent = 'Pause';
+  document.getElementById('stop-poll-btn').onclick = stopPolling;
+  await pollStatus();
+  setTimeout(pollStatus, 800);
+  setTimeout(pollStatus, 2000);
+  state.pollTimer = setInterval(pollStatus, 3000);
+}
+
+async function rollbackVM(vmName) {
+  if (!confirm(`Roll back migration for "${vmName}"? This will delete the Proxmox VM and remove the VMware snapshot.`)) return;
+  const { ok, data } = await api('POST', `/migrate/rollback/${encodeURIComponent(vmName)}`);
+  if (!ok) alert('Rollback failed: ' + (data.detail || 'Unknown error'));
+  else pollStatus();
+}
+
+async function resetVM(vmName) {
+  if (!confirm(`Reset all migration state for "${vmName}" and re-run from scratch?\n\nUse this if the VM is missing from Proxmox but the DB shows it as completed.\n\nThe VMware source VM will NOT be affected.`)) return;
+  const { ok, data } = await api('POST', `/migrate/reset/${encodeURIComponent(vmName)}`);
+  if (!ok) { alert('Reset failed: ' + (data.detail || 'Unknown error')); return; }
+  // Immediately re-submit the migration for this VM
+  await pollStatus();
+  // Restart polling to catch the new run
+  if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+  document.getElementById('poll-indicator').textContent = 'Auto-refresh every 3s';
+  document.getElementById('stop-poll-btn').textContent = 'Pause';
+  document.getElementById('stop-poll-btn').onclick = stopPolling;
+  state.pollTimer = setInterval(pollStatus, 3000);
+  alert(`State reset for "${vmName}". Now go to Step 2 and click "Start Migration" again to re-run all phases.`);
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Log drawer
+   ────────────────────────────────────────────────────────────────────────────── */
+function openLogs(vmName) {
+  // Close existing stream
+  if (state.logSource) {
+    state.logSource.close();
+    state.logSource = null;
+  }
+
+  state.logVm = vmName;
+  document.getElementById('log-drawer-vm-name').textContent = vmName;
+  document.getElementById('log-body').innerHTML = '';
+  document.getElementById('log-drawer').classList.add('open');
+
+  const es = new EventSource(`/api/logs/${encodeURIComponent(vmName)}`);
+  state.logSource = es;
+
+  es.onmessage = (e) => {
+    try {
+      const { line, level, timestamp } = JSON.parse(e.data);
+      if (!line) return;
+      appendLogLine(line, level, timestamp);
+    } catch {}
+  };
+
+  es.onerror = () => {
+    appendLogLine('[Log stream disconnected]', 'WARNING', '');
+  };
+}
+
+function appendLogLine(line, level, ts) {
+  const body = document.getElementById('log-body');
+  const div = document.createElement('div');
+  div.className = `log-line log-${level}`;
+  div.innerHTML = ts ? `<span class="log-ts">${escHtml(ts)}</span>${escHtml(line)}` : escHtml(line);
+  body.appendChild(div);
+  // Auto-scroll to bottom
+  body.scrollTop = body.scrollHeight;
+}
+
+function closeLogDrawer() {
+  document.getElementById('log-drawer').classList.remove('open');
+  if (state.logSource) { state.logSource.close(); state.logSource = null; }
+}
+
+function clearLogs() {
+  document.getElementById('log-body').innerHTML = '';
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Utils
+   ────────────────────────────────────────────────────────────────────────────── */
+function v(id) { return document.getElementById(id).value.trim(); }
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Init — restore connection status on page load
+   ────────────────────────────────────────────────────────────────────────────── */
+async function init() {
+  const { ok, data } = await api('GET', '/status/connections');
+  if (!ok) return;
+  if (data.vmware?.connected) {
+    state.vmwareConnected = true;
+    document.getElementById('vmware-badge').className = 'badge badge-connected';
+    document.getElementById('vmware-badge').textContent = 'Connected';
+    document.getElementById('vmw-status').className = 'conn-status ok';
+    document.getElementById('vmw-status').style.display = 'flex';
+    document.getElementById('vmw-status').textContent = `Connected to ${data.vmware.host}`;
+  }
+  if (data.proxmox?.connected) {
+    state.proxmoxConnected = true;
+    document.getElementById('prx-badge').className = 'badge badge-connected';
+    document.getElementById('prx-badge').textContent = 'Connected';
+    document.getElementById('prx-status').className = 'conn-status ok';
+    document.getElementById('prx-status').style.display = 'flex';
+    document.getElementById('prx-status').textContent = `Connected to ${data.proxmox.host}`;
+  }
+  updateStep1Footer();
+
+  // Check if there's an active migration
+  const statusRes = await api('GET', '/migrate/status');
+  if (statusRes.ok && Array.isArray(statusRes.data) && statusRes.data.length) {
+    document.getElementById('step-btn-3').disabled = false;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
