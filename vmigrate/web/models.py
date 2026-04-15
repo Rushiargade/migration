@@ -119,16 +119,52 @@ class StartMigrationRequest(BaseModel):
 class VMStatus(BaseModel):
     vm_name: str
     phase: str
-    status: str                     # PENDING / RUNNING / SUCCESS / FAILED
+    status: str                     # PENDING / RUNNING / SUCCESS / FAILED / PAUSED
     started_at: Optional[str] = None
     updated_at: Optional[str] = None
     error: Optional[str] = None
     progress_pct: int = 0           # 0-100
+    phase_description: str = ""     # Human-readable phase name
+    current_detail: str = ""        # Current operation detail
+    paused: bool = False            # True if paused
+    can_pause: bool = False         # True if pause is allowed
+    can_cancel: bool = False        # True if cancel is allowed
+    can_resume: bool = False        # True if resume is allowed
 
 
 class MigrationStartResponse(BaseModel):
     job_id: str
     vm_names: list[str]
+
+
+class ConfirmationRequest(BaseModel):
+    """Request for pause/cancel/resume actions requiring confirmation."""
+    vm_name: str
+    action: str  # 'pause' | 'cancel' | 'resume'
+    reason: Optional[str] = None
+
+
+class ConfirmationResponse(BaseModel):
+    """Response with confirmation token."""
+    confirmation_token: str
+    action: str
+    message: str
+    expires_in_seconds: int = 60
+
+
+class ExecuteActionRequest(BaseModel):
+    """Execute pause/cancel/resume with confirmation."""
+    vm_name: str
+    action: str
+    confirmation_token: str
+
+
+class ActionResponse(BaseModel):
+    """Response after action is executed."""
+    success: bool
+    vm_name: str
+    action: str
+    message: str
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -20,6 +21,10 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from vmigrate.web.app import get_or_create_session, set_session
 from vmigrate.web.models import (
+    ActionResponse,
+    ConfirmationRequest,
+    ConfirmationResponse,
+    ExecuteActionRequest,
     MigrationStartResponse,
     ResourceMapping,
     StartMigrationRequest,
@@ -38,6 +43,11 @@ router = APIRouter(tags=["migration"])
 _executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="vmigrate-worker")
 _jobs: dict[str, dict] = {}   # job_id → {futures, state_db, vm_names, work_dir}
 _jobs_lock = threading.Lock()
+
+# Confirmation token registry for pause/cancel/resume actions
+# token → {vm_name, action, expires_at}
+_confirmation_tokens: dict[str, dict] = {}
+_confirmation_tokens_lock = threading.Lock()
 
 _TOTAL_PHASES = len(ORDERED_PHASES)  # 13
 
@@ -67,6 +77,34 @@ def _phase_to_pct(phase_name: str, status: str) -> int:
     if status == "RUNNING":
         return base + 2
     return base
+
+
+def _get_phase_description(phase_name: str, status: str) -> str:
+    """Return a human-readable description of the current phase."""
+    phase_descriptions = {
+        "PREFLIGHT": "Pre-flight checks",
+        "SNAPSHOT": "Creating VMware snapshot",
+        "EXPORT": "Exporting VM from VMware",
+        "CONVERT_DISK": "Converting disk format",
+        "INJECT": "Injecting VirtIO drivers (Windows only)",
+        "IMPORT": "Importing VM to Proxmox",
+        "CLEANUP": "Cleaning up temporary files",
+        "COMPLETED": "Migration complete",
+        "FAILED": "Migration failed",
+    }
+    
+    desc = phase_descriptions.get(phase_name, phase_name)
+    
+    if status == "RUNNING":
+        return f"{desc}..."
+    elif status == "SUCCESS":
+        return f"{desc} ✓"
+    elif status == "FAILED":
+        return f"{desc} ✗"
+    elif status == "PENDING":
+        return f"Waiting for {desc.lower()}"
+    
+    return desc
 
 
 def _build_migration_config(session: dict, mappings: list[ResourceMapping]):
@@ -354,15 +392,30 @@ async def migration_status(
         if not state:
             result.append(VMStatus(vm_name=vm_name, phase="PREFLIGHT", status="PENDING"))
             continue
+        phase = state.get("phase", "PREFLIGHT")
+        status_val = state.get("status", "PENDING")
+        is_paused = state.get("paused", False)
+        
+        # Determine which actions are available
+        can_pause = status_val == "RUNNING" and not is_paused
+        can_resume = is_paused
+        can_cancel = status_val in ("PENDING", "RUNNING")
+        
         result.append(
             VMStatus(
                 vm_name=vm_name,
-                phase=state.get("phase", "PREFLIGHT"),
-                status=state.get("status", "PENDING"),
+                phase=phase,
+                status=status_val,
                 started_at=None,
                 updated_at=state.get("updated_at"),
                 error=state.get("error"),
-                progress_pct=_phase_to_pct(state.get("phase", "PREFLIGHT"), state.get("status", "PENDING")),
+                progress_pct=_phase_to_pct(phase, status_val),
+                phase_description=_get_phase_description(phase, status_val),
+                current_detail=state.get("current_detail", ""),
+                paused=is_paused,
+                can_pause=can_pause,
+                can_cancel=can_cancel,
+                can_resume=can_resume,
             )
         )
 
@@ -541,3 +594,141 @@ async def reset_vm_state(
 
     logger.info("Reset migration state for VM '%s' to PREFLIGHT/PENDING", vm_name)
     return {"success": True, "message": f"State reset for VM '{vm_name}'. Start a new migration to re-run all phases."}
+
+
+@router.post("/migrate/confirm-action", response_model=ConfirmationResponse)
+async def confirm_action(
+    body: ConfirmationRequest,
+    request: Request,
+    response: Response,
+) -> ConfirmationResponse:
+    """Request confirmation for a pause/cancel/resume action.
+    
+    Returns a confirmation token that must be sent with the execute request.
+    Token expires after 60 seconds.
+    """
+    sid, session = get_or_create_session(request, response)
+    set_session(sid, session)
+
+    # Validate action
+    if body.action not in ("pause", "cancel", "resume"):
+        raise HTTPException(status_code=400, detail=f"Invalid action: {body.action}")
+
+    # Generate confirmation token
+    token = str(uuid.uuid4())
+    expires_at = time.time() + 60
+
+    with _confirmation_tokens_lock:
+        _confirmation_tokens[token] = {
+            "vm_name": body.vm_name,
+            "action": body.action,
+            "expires_at": expires_at,
+        }
+
+    logger.info("Generated confirmation token for %s on VM '%s'", body.action, body.vm_name)
+    
+    return ConfirmationResponse(
+        confirmation_token=token,
+        action=body.action,
+        message=f"Please confirm {body.action} for VM '{body.vm_name}'",
+        expires_in_seconds=60,
+    )
+
+
+@router.post("/migrate/execute-action", response_model=ActionResponse)
+async def execute_action(
+    body: ExecuteActionRequest,
+    request: Request,
+    response: Response,
+) -> ActionResponse:
+    """Execute a pause/cancel/resume action with a valid confirmation token."""
+    sid, session = get_or_create_session(request, response)
+    set_session(sid, session)
+
+    # Validate token
+    with _confirmation_tokens_lock:
+        token_data = _confirmation_tokens.pop(body.confirmation_token, None)
+
+    if not token_data:
+        raise HTTPException(status_code=401, detail="Invalid or expired confirmation token")
+
+    # Check if token has expired
+    if time.time() > token_data["expires_at"]:
+        raise HTTPException(status_code=401, detail="Confirmation token has expired")
+
+    # Verify token matches requested action and VM
+    if token_data["vm_name"] != body.vm_name or token_data["action"] != body.action:
+        raise HTTPException(status_code=400, detail="Token does not match requested action or VM")
+
+    # Get job info
+    active_job_id = session.get("active_job_id")
+    if not active_job_id:
+        raise HTTPException(status_code=404, detail="No active migration job found.")
+
+    with _jobs_lock:
+        job = _jobs.get(active_job_id)
+
+    if not job or body.vm_name not in job["vm_names"]:
+        raise HTTPException(status_code=404, detail=f"VM '{body.vm_name}' not in active job.")
+
+    state_db: StateDB = job["state_db"]
+
+    # Execute the action
+    try:
+        if body.action == "pause":
+            with state_db._conn:
+                state_db._conn.execute(
+                    "UPDATE vm_state SET paused=1, updated_at=datetime('now') WHERE vm_name=?",
+                    (body.vm_name,),
+                )
+            logger.info("Paused migration for VM '%s'", body.vm_name)
+            return ActionResponse(
+                success=True,
+                vm_name=body.vm_name,
+                action="pause",
+                message=f"Migration paused for VM '{body.vm_name}'",
+            )
+
+        elif body.action == "resume":
+            with state_db._conn:
+                state_db._conn.execute(
+                    "UPDATE vm_state SET paused=0, updated_at=datetime('now') WHERE vm_name=?",
+                    (body.vm_name,),
+                )
+            logger.info("Resumed migration for VM '%s'", body.vm_name)
+            return ActionResponse(
+                success=True,
+                vm_name=body.vm_name,
+                action="resume",
+                message=f"Migration resumed for VM '{body.vm_name}'",
+            )
+
+        elif body.action == "cancel":
+            # Cancel by marking the future as cancelled (if not started)
+            # or by setting state to CANCELLED if already running
+            future = job["futures"].get(body.vm_name)
+            cancelled_future = False
+            if future and future.cancel():
+                cancelled_future = True
+                logger.info("Cancelled pending future for VM '%s'", body.vm_name)
+
+            # Update state to track cancellation
+            with state_db._conn:
+                state_db._conn.execute(
+                    """UPDATE vm_state 
+                       SET status=?, updated_at=datetime('now')
+                       WHERE vm_name=?""",
+                    ("CANCELLED", body.vm_name),
+                )
+
+            logger.info("Cancelled migration for VM '%s' (future: %s)", body.vm_name, cancelled_future)
+            return ActionResponse(
+                success=True,
+                vm_name=body.vm_name,
+                action="cancel",
+                message=f"Migration cancelled for VM '{body.vm_name}'",
+            )
+
+    except Exception as exc:
+        logger.exception("Failed to execute %s for VM '%s': %s", body.action, body.vm_name, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to execute action: {exc}")

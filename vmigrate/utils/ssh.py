@@ -97,8 +97,10 @@ class SSHClient:
         transport = client.get_transport()
         if transport:
             transport.set_keepalive(30)
+            # Enable compression for faster transfers
+            transport.use_compression(True)
         self._client = client
-        logger.debug("SSH connection established to %s", self.host)
+        logger.debug("SSH connection established to %s (with compression & keep-alive)", self.host)
 
     def _ensure_connected(self) -> None:
         """Raise RuntimeError if not connected."""
@@ -195,6 +197,26 @@ class SSHClient:
                     )
 
             sftp.put(str(local), remote, callback=_progress, confirm=True)
+        except OSError as e:
+            # Check for out-of-disk-space errors
+            if "No space left on device" in str(e) or "ENOSPC" in str(e):
+                msg = f"Out of disk space on {self.host} (uploaded {transferred / 1024 / 1024:.0f}/{file_size / 1024 / 1024:.0f} MB)"
+                logger.error(msg)
+                raise RuntimeError(msg) from e
+            elif "Connection reset" in str(e) or "EOF occurred" in str(e) or "Broken pipe" in str(e):
+                msg = f"Connection lost to {self.host} during SFTP upload (transferred {transferred / 1024 / 1024:.0f} MB)"
+                logger.error(msg)
+                # Force reconnect on next operation
+                self._close()
+                raise RuntimeError(msg) from e
+            else:
+                logger.error("SFTP upload failed: %s", e)
+                raise
+        except EOFError as e:
+            msg = f"SSH connection closed unexpectedly during upload (transferred {transferred / 1024 / 1024:.0f}/{file_size / 1024 / 1024:.0f} MB to {remote})"
+            logger.error(msg)
+            self._close()
+            raise RuntimeError(msg) from e
         finally:
             sftp.close()
 
