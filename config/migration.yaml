@@ -41,7 +41,7 @@ migration:
   virtio_iso_path: /opt/virtio-win/virtio-win.iso
 
   # Conversion host: Linux machine with qemu-img and virt-v2v installed
-  conversion_host: conversion.example.com
+  conversion_host: 10.5.5.113
   conversion_host_user: root
 
 # ---------------------------------------------------------------------------
