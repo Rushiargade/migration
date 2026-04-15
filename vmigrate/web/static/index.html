@@ -529,13 +529,15 @@ select option { background: var(--surface2); }
   background: #0a0c14;
   border-top: 1px solid var(--border);
   transform: translateY(100%);
-  transition: transform 0.3s ease;
+  transition: transform 0.3s ease, height 0.3s ease;
   z-index: 200;
   display: flex;
   flex-direction: column;
 }
 
 .log-drawer.open { transform: translateY(0); }
+.log-drawer.minimized { height: 40px; }
+.log-drawer.minimized .log-body { display: none; }
 
 .log-drawer-header {
   display: flex;
@@ -961,9 +963,11 @@ select option { background: var(--surface2); }
 <div class="log-drawer" id="log-drawer">
   <div class="log-drawer-header">
     <span class="log-drawer-title">Logs — <span class="log-drawer-vm" id="log-drawer-vm-name"></span></span>
-    <div style="display:flex;gap:8px;">
+    <div style="display:flex;gap:8px;align-items:center;">
+      <span style="font-size:11px;color:var(--dim);margin-right:auto;">Press <kbd style="padding:2px 6px;background:var(--border);border-radius:3px;font-size:10px;">Esc</kbd> to minimize</span>
       <button class="btn btn-outline btn-sm" onclick="clearLogs()">Clear</button>
-      <button class="btn btn-outline btn-sm" onclick="closeLogDrawer()">Close</button>
+      <button class="btn btn-outline btn-sm" onclick="minimizeLogDrawer()" id="log-minimize-btn">−</button>
+      <button class="btn btn-outline btn-sm" onclick="closeLogDrawer()">×</button>
     </div>
   </div>
   <div class="log-body" id="log-body"></div>
@@ -1548,6 +1552,12 @@ function vmCardHTML(vm) {
   const errorHTML = vm.error ? `<div class="error-msg">${escHtml(vm.error)}</div>` : '';
 
   // Action buttons
+  const pauseBtn    = vm.can_pause
+    ? `<button class="btn btn-outline btn-sm" style="color:var(--yellow);border-color:var(--yellow)" onclick="pauseVM('${escHtml(vm.vm_name)}')" title="Pause this VM's migration">Pause</button>` : '';
+  const resumeBtn   = vm.can_resume
+    ? `<button class="btn btn-outline btn-sm" style="color:var(--green);border-color:var(--green)" onclick="resumeVM('${escHtml(vm.vm_name)}')" title="Resume this VM's paused migration">Resume</button>` : '';
+  const cancelBtn   = vm.can_cancel
+    ? `<button class="btn btn-outline btn-sm" style="color:var(--red);border-color:var(--red)" onclick="cancelVM('${escHtml(vm.vm_name)}')" title="Cancel this VM's migration">Cancel</button>` : '';
   const retryBtn    = vm.status === 'FAILED'
     ? `<button class="btn btn-outline btn-sm" onclick="retryVM('${escHtml(vm.vm_name)}')">Retry</button>` : '';
   const rollbackBtn = (vm.status === 'FAILED' || vm.phase === 'COMPLETED')
@@ -1580,6 +1590,7 @@ function vmCardHTML(vm) {
     ${errorHTML}
     <div class="vm-card-actions">
       <button class="btn btn-outline btn-sm" onclick="openLogs('${escHtml(vm.vm_name)}')">View Logs</button>
+      ${pauseBtn}${resumeBtn}${cancelBtn}
       ${retryBtn}
       ${rollbackBtn}
       ${resetBtn}
@@ -1621,6 +1632,34 @@ async function retryVM(vmName) {
   setTimeout(pollStatus, 800);
   setTimeout(pollStatus, 2000);
   state.pollTimer = setInterval(pollStatus, 3000);
+}
+
+async function pauseVM(vmName) {
+  const { ok, data } = await api('POST', `/migrate/confirm-action`, { vm_name: vmName, action: 'pause' });
+  if (!ok) { alert('Pause failed: ' + (data.detail || 'Unknown error')); return; }
+  const token = data.confirmation_token;
+  const confirmed = await api('POST', `/migrate/execute-action`, { vm_name: vmName, action: 'pause', confirmation_token: token });
+  if (!confirmed.ok) { alert('Pause execution failed: ' + (confirmed.data.detail || 'Unknown error')); return; }
+  await pollStatus();
+}
+
+async function resumeVM(vmName) {
+  const { ok, data } = await api('POST', `/migrate/confirm-action`, { vm_name: vmName, action: 'resume' });
+  if (!ok) { alert('Resume failed: ' + (data.detail || 'Unknown error')); return; }
+  const token = data.confirmation_token;
+  const confirmed = await api('POST', `/migrate/execute-action`, { vm_name: vmName, action: 'resume', confirmation_token: token });
+  if (!confirmed.ok) { alert('Resume execution failed: ' + (confirmed.data.detail || 'Unknown error')); return; }
+  await pollStatus();
+}
+
+async function cancelVM(vmName) {
+  if (!confirm(`Cancel migration for "${vmName}"? It can be resumed later.`)) return;
+  const { ok, data } = await api('POST', `/migrate/confirm-action`, { vm_name: vmName, action: 'cancel' });
+  if (!ok) { alert('Cancel failed: ' + (data.detail || 'Unknown error')); return; }
+  const token = data.confirmation_token;
+  const confirmed = await api('POST', `/migrate/execute-action`, { vm_name: vmName, action: 'cancel', confirmation_token: token });
+  if (!confirmed.ok) { alert('Cancel execution failed: ' + (confirmed.data.detail || 'Unknown error')); return; }
+  await pollStatus();
 }
 
 async function rollbackVM(vmName) {
@@ -1687,13 +1726,35 @@ function appendLogLine(line, level, ts) {
 }
 
 function closeLogDrawer() {
-  document.getElementById('log-drawer').classList.remove('open');
+  document.getElementById('log-drawer').classList.remove('open', 'minimized');
   if (state.logSource) { state.logSource.close(); state.logSource = null; }
+}
+
+function minimizeLogDrawer() {
+  const drawer = document.getElementById('log-drawer');
+  const btn = document.getElementById('log-minimize-btn');
+  drawer.classList.toggle('minimized');
+  btn.textContent = drawer.classList.contains('minimized') ? '+' : '−';
 }
 
 function clearLogs() {
   document.getElementById('log-body').innerHTML = '';
 }
+
+// Keyboard shortcut: Esc to minimize/close logs
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const drawer = document.getElementById('log-drawer');
+    if (drawer.classList.contains('open')) {
+      if (drawer.classList.contains('minimized')) {
+        closeLogDrawer();
+      } else {
+        minimizeLogDrawer();
+      }
+      e.preventDefault();
+    }
+  }
+});
 
 /* ──────────────────────────────────────────────────────────────────────────────
    Utils
