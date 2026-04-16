@@ -93,6 +93,7 @@ class MigrationSettings:
     virtio_iso_path: Optional[str] = None
     conversion_host: Optional[str] = None
     conversion_host_user: str = "root"
+    conversion_host_password: Optional[str] = None
 
 
 @dataclass
@@ -212,6 +213,7 @@ def _parse_migration(raw: dict) -> MigrationSettings:
         virtio_iso_path=raw.get("virtio_iso_path"),
         conversion_host=raw.get("conversion_host"),
         conversion_host_user=str(raw.get("conversion_host_user", "root")),
+        conversion_host_password=raw.get("conversion_host_password"),
     )
 
 

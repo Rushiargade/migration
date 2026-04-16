@@ -145,10 +145,35 @@ def _build_migration_config(session: dict, mappings: list[ResourceMapping]):
         cluster_ips=prx.get("cluster_ips", []),
     )
 
-    import tempfile, os as _os
-    _tmp = Path(tempfile.gettempdir()) / "vmigrate"
-    work_dir = Path(_os.environ.get("VMIGRATE_WORK_DIR", str(_tmp)))
+    import os as _os
+    work_dir = Path(_os.environ.get("VMIGRATE_WORK_DIR", "/var/lib/vmigrate"))
     state_db_path = work_dir / "state.db"
+
+    # Attempt to load conversion parameters from migration.yaml if available
+    conv_host = None
+    conv_user = "root"
+    conv_pass = "supp0rt$ESDS"
+    virtio_iso = None
+    cfg_path = Path("/app/config/migration.yaml")
+    if cfg_path.exists():
+        import yaml
+        try:
+            with cfg_path.open(encoding="utf-8") as f:
+                raw_cfg = yaml.safe_load(f)
+                if raw_cfg and "migration" in raw_cfg:
+                    mig_sect = raw_cfg["migration"]
+                    conv_host = mig_sect.get("conversion_host", conv_host)
+                    conv_user = mig_sect.get("conversion_host_user", conv_user)
+                    conv_pass = mig_sect.get("conversion_host_password", conv_pass)
+                    virtio_iso = mig_sect.get("virtio_iso_path", virtio_iso)
+        except Exception:
+            pass
+            
+    # Fallback to env vars if yaml wasn't found or parsed
+    conv_host = _os.environ.get("VMIGRATE_CONVERSION_HOST", conv_host)
+    conv_user = _os.environ.get("VMIGRATE_CONVERSION_USER", conv_user)
+    conv_pass = _os.environ.get("VMIGRATE_CONVERSION_PASSWORD", conv_pass)
+    virtio_iso = _os.environ.get("VMIGRATE_VIRTIO_ISO", virtio_iso)
 
     migration_settings = MigrationSettings(
         mode="cold",      # per-VM mode_override handles live
@@ -157,6 +182,10 @@ def _build_migration_config(session: dict, mappings: list[ResourceMapping]):
         max_parallel=2,
         retry_attempts=3,
         retry_delay_seconds=30,
+        conversion_host=conv_host,
+        conversion_host_user=conv_user,
+        conversion_host_password=conv_pass,
+        virtio_iso_path=virtio_iso,
     )
 
     # Build network_map and storage_map from cached VM data + user mappings
@@ -322,12 +351,12 @@ async def start_migration(
                     "VM '%s' already COMPLETED — skipping (use Reset & Re-run to force).",
                     m.vm_name,
                 )
-            elif existing_status == "FAILED":
-                # FAILED → resume from the failed phase, do NOT wipe artifacts.
+            elif existing_status in ("FAILED", "CANCELLED"):
+                # FAILED / CANCELLED → resume from the failed phase, do NOT wipe artifacts.
                 # Just clear the error and set status back to PENDING so the
-                # orchestrator will re-try only the failed phase and everything after.
+                # orchestrator will re-try only the incomplete phase and everything after.
                 logger.info(
-                    "VM '%s' previously FAILED at phase %s — resuming from that phase.",
+                    "VM '%s' previously FAILED/CANCELLED at phase %s — resuming from that phase.",
                     m.vm_name, existing_phase,
                 )
                 with state_db._conn:
@@ -375,19 +404,36 @@ async def migration_status(
     set_session(sid, session)
 
     active_job_id = job_id or session.get("active_job_id")
-    if not active_job_id:
-        return []
+    
+    vm_names_to_poll = []
+    state_db = None
 
-    with _jobs_lock:
-        job = _jobs.get(active_job_id)
+    if active_job_id:
+        with _jobs_lock:
+            job = _jobs.get(active_job_id)
+            if job:
+                vm_names_to_poll = job["vm_names"]
+                state_db = job["state_db"]
 
-    if not job:
-        return []
+    # If no active job in memory (e.g. process restarted), recover from DB
+    if not state_db:
+        import os as _os
+        from pathlib import Path
+        work_dir = Path(_os.environ.get("VMIGRATE_WORK_DIR", "/var/lib/vmigrate"))
+        state_db_path = work_dir / "state.db"
+        if not state_db_path.exists():
+            return []
+        from vmigrate.state import StateDB
+        state_db = StateDB(state_db_path)
+        all_states = state_db.list_all()
+        # Return anything that isn't entirely wiped/new
+        vm_names_to_poll = [s["vm_name"] for s in all_states if s.get("phase")]
+        if not vm_names_to_poll:
+            return []
 
-    state_db: StateDB = job["state_db"]
     result: list[VMStatus] = []
 
-    for vm_name in job["vm_names"]:
+    for vm_name in vm_names_to_poll:
         state = state_db.get_vm_state(vm_name)
         if not state:
             result.append(VMStatus(vm_name=vm_name, phase="PREFLIGHT", status="PENDING"))
@@ -541,9 +587,8 @@ async def export_progress(
     sid, session = get_or_create_session(request, response)
     set_session(sid, session)
 
-    import tempfile as _tf, os as _os
-    _tmp = Path(_tf.gettempdir()) / "vmigrate"
-    _work = Path(_os.environ.get("VMIGRATE_WORK_DIR", str(_tmp)))
+    import os as _os
+    _work = Path(_os.environ.get("VMIGRATE_WORK_DIR", "/var/lib/vmigrate"))
     progress_file = _work / vm_name / "export_progress.json"
     if not progress_file.exists():
         return {}
@@ -593,7 +638,26 @@ async def reset_vm_state(
         )
 
     logger.info("Reset migration state for VM '%s' to PREFLIGHT/PENDING", vm_name)
-    return {"success": True, "message": f"State reset for VM '{vm_name}'. Start a new migration to re-run all phases."}
+
+    # Wipe the old log file to prepare for the fresh run
+    import os as _os
+    from pathlib import Path
+    log_file = Path(_os.environ.get("VMIGRATE_WORK_DIR", "/var/lib/vmigrate")) / vm_name / "migration.log"
+    if log_file.exists():
+        try:
+            log_file.unlink()
+        except Exception as e:
+            logger.warning("Could not delete old log file for VM '%s': %s", vm_name, e)
+
+    # Resubmit to thread pool to actually run it from scratch
+    config = job["config"]
+    future = _executor.submit(_run_migration_worker, config, state_db, vm_name)
+    with _jobs_lock:
+        job["futures"][vm_name] = future
+
+    logger.info("Automatically triggered fresh migration for VM '%s' in job %s", vm_name, active_job_id)
+
+    return {"success": True, "message": f"State reset and fresh migration started for VM '{vm_name}'."}
 
 
 @router.post("/migrate/confirm-action", response_model=ConfirmationResponse)

@@ -51,6 +51,8 @@ migration:
   # Flow: vCenter -> 10.5.5.113:/var/lib/vmigrate -> convert locally -> Proxmox import
   conversion_host: 10.5.5.113
   conversion_host_user: root
+  conversion_host_password: "supp0rt$ESDS"  # <-- ADD THIS LINE
+
 
 # ---------------------------------------------------------------------------
 # Network mapping: VMware portgroup -> Proxmox bridge

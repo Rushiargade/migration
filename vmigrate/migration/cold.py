@@ -111,6 +111,11 @@ class ColdMigration:
         if current:
             current_phase = Phase[current["phase"]]
             current_status = PhaseStatus(current["status"])
+            
+            if current_status == PhaseStatus.CANCELLED:
+                self.logger.warning("Migration for VM '%s' was CANCELLED by user. Aborting phase %s.", self.vm_name, phase.name)
+                return False
+
             if (
                 current_phase.value > phase.value
                 or (current_phase == phase and current_status == PhaseStatus.SUCCESS)
@@ -180,9 +185,14 @@ class ColdMigration:
             for phase, fn in phases:
                 success = self._run_phase(phase, fn)
                 if not success:
-                    self.state.transition(
-                        self.vm_name, Phase.FAILED, PhaseStatus.FAILED
-                    )
+                    # Check if it failed because it was cancelled
+                    current = self.state.get_vm_state(self.vm_name)
+                    if current and current["status"] == "CANCELLED":
+                        self.logger.info("Migration effectively stopped due to cancellation.")
+                    else:
+                        self.state.transition(
+                            self.vm_name, Phase.FAILED, PhaseStatus.FAILED
+                        )
                     return False
 
             self.state.transition(
@@ -226,10 +236,11 @@ class ColdMigration:
         # SSH to conversion host if configured
         conv_host = self.config.migration.conversion_host
         if conv_host:
+            conv_pass = self.config.migration.conversion_host_password or self.config.proxmox.password
             self._conversion_ssh = SSHClient(
                 host=conv_host,
                 user=self.config.migration.conversion_host_user,
-                password=self.config.proxmox.password,
+                password=conv_pass,
             )
             self._conversion_ssh.connect()
 
@@ -619,19 +630,76 @@ class ColdMigration:
                         storage = sm.proxmox_storage
                     break
 
-            disk_id = disk_mgr.import_disk(
-                vmid=int(vmid),
-                node=self.vm_config.target_node,
-                qcow2_path=qcow2_path,
-                storage=storage,
-            )
-            disk_mgr.attach_disk(
-                vmid=int(vmid),
-                node=self.vm_config.target_node,
-                disk_id=disk_id,
-                controller="scsi",
-                index=idx,
-            )
+            # If conversion happened on a separate host, we must push the qcow2 to Proxmox.
+            # To avoid using Proxmox root storage (`/var/tmp`), we stream raw bytes natively over HTTP
+            # directly into a dynamically allocated Proxmox block device.
+            conv_ssh = getattr(self, "_conversion_ssh", None)
+
+            if conv_ssh is not None:
+                raw_path = qcow2_path.with_suffix(".raw")
+                self.logger.info("Converting qcow2 to raw stream format on conversion host...")
+                rc, _, err = conv_ssh.run(f"qemu-img convert -f qcow2 -O raw {qcow2_path} {raw_path}")
+                if rc != 0:
+                    raise RuntimeError(f"qemu-img convert failed on conversion host: {err}")
+
+                rc, out, _ = conv_ssh.run(f"stat -c %s {raw_path}")
+                size_kb = (int(out.strip()) + 1023) // 1024
+
+                # Start Python HTTP file server explicitly for streaming this raw disk
+                port = 30000 + idx
+                http_cmd = f"cd {qcow2_path.parent} && nohup python3 -m http.server {port} >/dev/null 2>&1 & echo $!"
+                rc, pid_str, _ = conv_ssh.run(http_cmd)
+                http_pid = pid_str.strip()
+
+                try:
+                    # Allocate block device dynamically on Proxmox storage pool
+                    alloc_cmd = f"pvesm alloc {storage} {vmid} vm-{vmid}-disk-{idx} {size_kb}"
+                    self.logger.info("Allocating volume on Proxmox: %s", alloc_cmd)
+                    
+                    # Pre-emptively clear it out if it exists from a previous FAILED migration run
+                    node_ssh.run(f"pvesm free {storage}:vm-{vmid}-disk-{idx}")
+                    rc, out, err = node_ssh.run(alloc_cmd)
+                    if rc != 0:
+                        raise RuntimeError(f"pvesm alloc failed: {err}")
+                    
+                    vol_id = f"{storage}:vm-{vmid}-disk-{idx}"
+                    rc, out, err = node_ssh.run(f"pvesm path {vol_id}")
+                    if rc != 0:
+                        raise RuntimeError(f"pvesm path failed for {vol_id}: {err}")
+                    dev_path = out.strip()
+
+                    # Stream! conv=sparse ensures we don't balloon zeroed space on LVM-thin
+                    url = f"http://{conv_ssh.host}:{port}/{raw_path.name}"
+                    self.logger.info("Streaming disk directly into Proxmox block storage: %s -> %s", url, dev_path)
+                    
+                    rc, out, err = node_ssh.run(f"wget -qO- {url} | dd of={dev_path} bs=4M conv=sparse", timeout=36000)
+                    if rc != 0:
+                        raise RuntimeError(f"Disk stream failed: {err}")
+
+                    # Attach to VM configuration directly
+                    rc, out, err = node_ssh.run(f"qm set {vmid} --scsi{idx} {vol_id}")
+                    if rc != 0:
+                        raise RuntimeError(f"Failed to attach disk {vol_id}: {err}")
+                finally:
+                    # Cleanup Python HTTP stream & the massive raw file
+                    conv_ssh.run(f"kill -9 {http_pid}")
+                    conv_ssh.run(f"rm -f {raw_path}")
+
+            else:
+                # No separate conversion host used, run qm importdisk 
+                disk_id = disk_mgr.import_disk(
+                    vmid=int(vmid),
+                    node=self.vm_config.target_node,
+                    qcow2_path=qcow2_path,
+                    storage=storage,
+                )
+                disk_mgr.attach_disk(
+                    vmid=int(vmid),
+                    node=self.vm_config.target_node,
+                    disk_id=disk_id,
+                    controller="scsi",
+                    index=idx,
+                )
             if idx == 0:
                 disk_mgr.set_boot_order(
                     vmid=int(vmid),

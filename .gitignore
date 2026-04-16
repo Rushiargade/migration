@@ -172,3 +172,12 @@ $RECYCLE.BIN/
 *.backup
 *.orig
 *.rej
+
+# Deployment / Packaging artifacts
+vmigrate-update.tar
+update_bundle.tar
+*.bat.bak
+
+# Configuration (Keep examples, ignore actual)
+config/*.yaml
+!config/migration.example.yaml

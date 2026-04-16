@@ -49,6 +49,7 @@ class PhaseStatus(Enum):
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 # Phases that are part of the normal forward progression (excludes COMPLETED/FAILED)

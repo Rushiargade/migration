@@ -144,6 +144,24 @@ class VMwareExporter:
                     f"{[d.targetId for d in lease.info.deviceUrl]}"
                 )
 
+            # --- DNS Bypass: Rewrite hostname to ESXi IP address ---
+            try:
+                host_ip = None
+                for vnic in vm.runtime.host.config.network.vnic:
+                    if vnic.spec.ip.ipAddress:
+                        host_ip = vnic.spec.ip.ipAddress
+                        break
+                if host_ip and url.startswith("http"):
+                    from urllib.parse import urlparse
+                    parsed = urlparse(url)
+                    if not url.startswith("https://*") and parsed.hostname != host_ip:
+                        port_suffix = f":{parsed.port}" if parsed.port else ""
+                        new_netloc = f"{host_ip}{port_suffix}"
+                        url = parsed._replace(netloc=new_netloc).geturl()
+                        logger.info("Rewrote NFC URL to use IP %s instead of hostname %s to bypass DNS issues.", host_ip, parsed.hostname)
+            except Exception as exc:
+                logger.debug("Could not determine ESXi IP for URL rewrite: %s", exc)
+
             # Replace * with the ESXi host in the URL (common in NFC URLs)
             if url.startswith("https://*"):
                 url = url.replace("*", self._client._config.host, 1)

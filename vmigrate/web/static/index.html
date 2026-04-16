@@ -529,10 +529,14 @@ select option { background: var(--surface2); }
   background: #0a0c14;
   border-top: 1px solid var(--border);
   transform: translateY(100%);
-  transition: transform 0.3s ease, height 0.3s ease;
+  transition: transform 0.3s ease;
   z-index: 200;
   display: flex;
   flex-direction: column;
+  resize: vertical;
+  overflow: auto;
+  min-height: 48px;
+  max-height: 90vh;
 }
 
 .log-drawer.open { transform: translateY(0); }
@@ -614,11 +618,12 @@ select option { background: var(--surface2); }
 
 /* ─── Export sub-progress ───────────────────────────────────────────────────── */
 .export-progress-box {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 14px;
-  margin-bottom: 12px;
+  background: #0f111a;
+  border: 1px solid #2d334b;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 16px;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
 .exp-header {
   display: flex;
@@ -701,7 +706,7 @@ select option { background: var(--surface2); }
       <div class="form-grid">
         <div class="form-group">
           <label class="form-label">vCenter Host / IP</label>
-          <input type="text" id="vmw-host" placeholder="vcenter.company.com" />
+          <input type="text" id="vmw-host" value="10.5.4.110" placeholder="vcenter.company.com" />
         </div>
         <div class="form-group">
           <label class="form-label">Port</label>
@@ -709,7 +714,7 @@ select option { background: var(--surface2); }
         </div>
         <div class="form-group">
           <label class="form-label">Username</label>
-          <input type="text" id="vmw-user" placeholder="administrator@vsphere.local" />
+          <input type="text" id="vmw-user" value="Esdscom\rushikesh.argade" placeholder="administrator@vsphere.local" />
         </div>
         <div class="form-group">
           <label class="form-label">Password</label>
@@ -717,12 +722,12 @@ select option { background: var(--surface2); }
         </div>
         <div class="form-group full">
           <label class="form-label">Datacenter Name</label>
-          <input type="text" id="vmw-dc" placeholder="DC1" />
+          <input type="text" id="vmw-dc" value="MAP1DR010203-GCC16" placeholder="DC1" />
         </div>
         <div class="form-group full">
           <div class="toggle-row">
             <label class="toggle">
-              <input type="checkbox" id="vmw-ssl">
+              <input type="checkbox" id="vmw-ssl" checked>
               <div class="toggle-track"></div>
               <div class="toggle-thumb"></div>
             </label>
@@ -751,7 +756,7 @@ select option { background: var(--surface2); }
       <div class="form-grid">
         <div class="form-group">
           <label class="form-label">Proxmox Host / IP</label>
-          <input type="text" id="prx-host" placeholder="pve01.company.com" />
+          <input type="text" id="prx-host" value="10.5.5.91" placeholder="pve01.company.com" />
         </div>
         <div class="form-group">
           <label class="form-label">Port</label>
@@ -767,7 +772,7 @@ select option { background: var(--surface2); }
         </div>
         <div class="form-group full">
           <label class="form-label">Target Node Name</label>
-          <input type="text" id="prx-node" placeholder="pve01" />
+          <input type="text" id="prx-node" value="map1hr09s03.esdscommunication.com" placeholder="pve01" />
         </div>
         <div class="form-group full">
           <label class="form-label">
@@ -776,7 +781,7 @@ select option { background: var(--surface2); }
               Comma-separated IPs of all Proxmox nodes (needed for SSH disk import in multi-node clusters)
             </span>
           </label>
-          <input type="text" id="prx-cluster-ips" placeholder="10.14.2.73, 10.14.2.74, 10.14.2.75" />
+          <input type="text" id="prx-cluster-ips" value="10.5.5.91" placeholder="10.14.2.73, 10.14.2.74, 10.14.2.75" />
         </div>
         <div class="form-group full">
           <div class="toggle-row">
@@ -1417,6 +1422,7 @@ function showStep2Alert(msg) {
    Export sub-progress polling (every 2s, only during EXPORT_DISK phase)
    ────────────────────────────────────────────────────────────────────────────── */
 const _exportPollers = {};  // vm_name → intervalId
+const _lastExportProgressHTML = {}; // vm_name → HTML strings
 
 function _startExportPoller(vmName) {
   if (_exportPollers[vmName]) return;
@@ -1468,6 +1474,13 @@ async function _pollExportProgress(vmName) {
 
     if (pct >= 100) _stopExportPoller(vmName);
   }
+
+  // Cache string contents to prevent flickering on 3s global refetch
+  _lastExportProgressHTML[vmName] = {
+    header: box.querySelector('.exp-header').innerHTML,
+    track: box.querySelector('.exp-track').innerHTML,
+    stats: box.querySelector('.exp-stats').innerHTML
+  };
 }
 
 function startPolling() {
@@ -1567,6 +1580,16 @@ function vmCardHTML(vm) {
 
   const phaseLabel = PHASE_LABELS[vm.phase] || vm.phase;
   const exportProgressId = `exp-${escHtml(vm.vm_name).replace(/[^a-z0-9]/gi,'_')}`;
+  
+  let expHeaderHtml = '<span class="exp-disk-label">Waiting for export to start...</span><span class="exp-speed"></span>';
+  let expTrackHtml = '<div class="exp-fill" style="width:0%"></div>';
+  let expStatsHtml = '';
+
+  if (_lastExportProgressHTML[vm.vm_name]) {
+    expHeaderHtml = _lastExportProgressHTML[vm.vm_name].header;
+    expTrackHtml = _lastExportProgressHTML[vm.vm_name].track;
+    expStatsHtml = _lastExportProgressHTML[vm.vm_name].stats;
+  }
 
   return `<div class="vm-card status-${statusClass}">
     <div class="vm-card-header">
@@ -1577,24 +1600,22 @@ function vmCardHTML(vm) {
     <div class="progress-track">
       <div class="progress-fill ${fillClass}" style="width:${vm.progress_pct}%"></div>
     </div>
-    ${vm.phase === 'EXPORT_DISK' && vm.status === 'RUNNING' ? `
-    <div id="${exportProgressId}" class="export-progress-box">
-      <div class="exp-header">
-        <span class="exp-disk-label">Waiting for export to start...</span>
-        <span class="exp-speed"></span>
-      </div>
-      <div class="exp-track"><div class="exp-fill" style="width:0%"></div></div>
-      <div class="exp-stats"></div>
-    </div>` : ''}
     ${timeline}
     ${errorHTML}
-    <div class="vm-card-actions">
+    <div class="vm-card-actions" style="margin-bottom: 0">
       <button class="btn btn-outline btn-sm" onclick="openLogs('${escHtml(vm.vm_name)}')">View Logs</button>
       ${pauseBtn}${resumeBtn}${cancelBtn}
       ${retryBtn}
       ${rollbackBtn}
       ${resetBtn}
     </div>
+    ${vm.phase === 'EXPORT_DISK' && vm.status === 'RUNNING' ? `
+    <div id="${exportProgressId}" class="export-progress-box">
+      <div style="font-size:11px; color:#a2a8c5; margin-bottom:8px; text-transform:uppercase; letter-spacing:0.5px;">Active Download Session</div>
+      <div class="exp-header">${expHeaderHtml}</div>
+      <div class="exp-track">${expTrackHtml}</div>
+      <div class="exp-stats">${expStatsHtml}</div>
+    </div>` : ''}
   </div>`;
 }
 
@@ -1798,6 +1819,8 @@ async function init() {
   const statusRes = await api('GET', '/migrate/status');
   if (statusRes.ok && Array.isArray(statusRes.data) && statusRes.data.length) {
     document.getElementById('step-btn-3').disabled = false;
+    goToStep(3);
+    startPolling();
   }
 }
 

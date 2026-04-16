@@ -23,7 +23,7 @@ _CONSOLE = Console(stderr=True)
 def setup_logging(
     vm_name: str,
     work_dir: Path,
-    level: str = "INFO",
+    level: str = "DEBUG",
 ) -> logging.Logger:
     """Configure and return a logger for a specific VM migration.
 
@@ -84,7 +84,7 @@ def setup_logging(
     return logger
 
 
-def get_root_logger(level: str = "INFO") -> logging.Logger:
+def get_root_logger(level: str = "DEBUG") -> logging.Logger:
     """Return the root vmigrate logger (not VM-specific).
 
     Used for orchestrator-level messages that are not tied to a single VM.

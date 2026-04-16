@@ -98,6 +98,19 @@ class VirtV2VConverter:
         # Ensure output directory exists on the conversion host
         self._ssh.run(f"mkdir -p {output_dir}", timeout=10)
 
+        # Force-clear Windows Hibernation / Fast Restart dirty bits on NTFS partitions first.
+        # This prevents virt-v2v's driver injection from failing with the infamous
+        # "filesystem was mounted read-only" ntfs-3g error.
+        ntfs_fix_script = f"""
+PARTS=$(guestfish --ro -a {vmdk_path} run : list-filesystems | awk -F: '/ntfs/ {{print $1}}')
+for PART in $PARTS; do
+    echo "Automatically clearing NTFS dirty/hibernation bit on $PART..."
+    guestfish --rw -a {vmdk_path} run : ntfsfix $PART || true
+done
+"""
+        logger.info("Executing pre-flight NTFS hibernation cleanup for %s", vm_name)
+        self._ssh.run(ntfs_fix_script, timeout=300)
+
         cmd_parts = [
             "virt-v2v",
             "-i", "disk", str(vmdk_path),
@@ -107,10 +120,10 @@ class VirtV2VConverter:
             "--bridge", network_bridge,
         ]
 
-        if self._virtio_iso_path:
-            cmd_parts += ["--virtio-win-dir", self._virtio_iso_path]
-
         cmd = " ".join(cmd_parts)
+        if self._virtio_iso_path:
+            # virt-v2v ignores --virtio-win-dir, it expects the VIRTIO_WIN env var
+            cmd = f"VIRTIO_WIN={self._virtio_iso_path} {cmd}"
         logger.info(
             "Starting virt-v2v conversion: VM='%s' src=%s out=%s",
             vm_name,

@@ -155,13 +155,19 @@ def create_app(config_path: Optional[str] = None) -> FastAPI:
     # ----- SPA catch-all -----
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
-        return FileResponse(str(_STATIC_DIR / "index.html"))
+        return FileResponse(
+            str(_STATIC_DIR / "index.html"),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        )
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str) -> FileResponse:
         # Only return the SPA for non-API paths
         if full_path.startswith("api/"):
             return JSONResponse({"detail": "Not found"}, status_code=404)
-        return FileResponse(str(_STATIC_DIR / "index.html"))
+        return FileResponse(
+            str(_STATIC_DIR / "index.html"),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+        )
 
     return app

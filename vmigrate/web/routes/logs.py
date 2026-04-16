@@ -28,7 +28,8 @@ _LOG_RE = re.compile(
     r"(?P<rest>.*)"
 )
 
-_WORK_DIR = Path("/var/lib/vmigrate")
+import os
+_WORK_DIR = Path(os.environ.get("VMIGRATE_WORK_DIR", "/var/lib/vmigrate"))
 
 
 def _find_log_file(vm_name: str) -> Path | None:
