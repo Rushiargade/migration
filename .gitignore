@@ -177,6 +177,9 @@ $RECYCLE.BIN/
 vmigrate-update.tar
 update_bundle.tar
 *.bat.bak
+OFFLINE_SETUP.bat
+OFFLINE_SETUP.sh
+push_offline_update.bat
 
 # Configuration (Keep examples, ignore actual)
 config/*.yaml
